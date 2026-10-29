@@ -199,6 +199,10 @@ const BUCKETS = {
 const BUCKET_LABEL = Object.fromEntries([...BUCKETS.inflow, ...BUCKETS.outflow]);
 function bucketOf(c) {
   if (!c) return '';
+  if (c.id === 'cat_loanin' || c.id === 'cat_capital') return 'fin_in';
+  if (c.id === 'cat_fdint' || c.id === 'cat_othinc') return 'oth_inc';
+  if (c.type === 'inflow' && (c.name === 'Loan Received' || c.name === 'Capital Infusion / Funding')) return 'fin_in';
+  if (c.type === 'inflow' && (c.name === 'FD / Bank Interest' || c.name === 'Other Income')) return 'oth_inc';
   if (c.bucket) {
     const norm = {
       'operating costs (outflow)': 'op_cost',
@@ -208,12 +212,20 @@ function bucketOf(c) {
       'financing & owner (outflow)': 'fin_out',
       'operating receipts (inflow)': 'op_rec',
       'other income (inflow)': 'oth_inc',
-      'financing (inflow)': 'fin_in'
+      'financing (inflow)': 'fin_in',
+      'fin_in': 'fin_in',
+      'oth_inc': 'oth_inc',
+      'op_rec': 'op_rec',
+      'op_cost': 'op_cost',
+      'proj_cost': 'proj_cost',
+      'tax': 'tax',
+      'capex': 'capex',
+      'fin_out': 'fin_out'
     }[String(c.bucket).toLowerCase().trim()];
     if (norm) return norm;
     return c.bucket;
   }
-  if (c.type === 'inflow') return c.kind === 'financing' ? 'fin_in' : c.group === 'Other Income' ? 'oth_inc' : 'op_rec';
+  if (c.type === 'inflow') return c.kind === 'financing' || c.group === 'Financing' ? 'fin_in' : c.group === 'Other Income' ? 'oth_inc' : 'op_rec';
   if (c.group === 'Project Costs') return 'proj_cost';
   return { tax: 'tax', capex: 'capex', financing: 'fin_out' }[c.kind] || 'op_cost';
 }
@@ -1416,6 +1428,8 @@ const IC = {
   receipt: '<path d="M5 2h14v20l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h3"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
   ext: '<path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>',
+  cloud: '<path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/>',
+  refresh: '<path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>',
 };
 const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[n] || ''}</svg>`;
 const $ = (s, r = document) => r.querySelector(s);
@@ -1459,7 +1473,7 @@ const fmtPct = v => (isFinite(v) ? v.toFixed(1) : '0.0') + '%';
 const S = {
   page: 'dashboard', fy: fyOf(TODAY), dashDept: '',
   ledger: { q: '', bucket: '', group: '', from: '', to: '', type: '', categoryId: '', departmentId: '', partyId: '', projectId: '', accountId: '', paymentMode: '', page: 0, sort: 'date', dir: -1, open: window.innerWidth > 900 },
-  cf: { by: 'category', period: window.innerWidth < 900 ? 'quarterly' : 'monthly' },
+  cf: { by: 'category', period: 'monthly' },
   report: 'parties', reportKind: 'client', projScope: 'all',
   master: 'client', audit: { userId: '', action: '', entity: '', q: '', page: 0 },
 };
@@ -1659,9 +1673,13 @@ PAGES.dashboard = {
       </tbody><tfoot><tr><td>Total</td><td class="num in">${money(sum(depNodes, n => n.ins))}</td><td class="num out">${money(totOut)}</td><td class="num">${money(sum(depNodes, n => n.ins) - totOut, { sign: true })}</td><td></td><td></td></tr></tfoot></table></div></div>`;
 
     // outflow by bucket — expandable to categories
-    const catTotals = aggregate(ents.filter(e => e.type === 'outflow' && filt(e)), [{ months: months }], e => e.categoryId);
     const bNodes = finishTree(categoryTree('outflow', c => catTotals[c.id] || [0], 'dash:b:'), 1);
-    bNodes.forEach(n => (n.children || []).forEach(g => g.children && g.children.sort((a, b) => b.vals[0] - a.vals[0])));
+    bNodes.forEach(n => {
+      if (n.children) {
+        n.children.sort((a, b) => ((b.vals?.[0] || 0) - (a.vals?.[0] || 0)));
+        n.children.forEach(g => g.children && g.children.sort((a, b) => (b.vals?.[0] || 0) - (a.vals?.[0] || 0)));
+      }
+    });
     const bTot = sum(bNodes, n => n.vals[0]);
     prepareTree('dash:b:', bNodes);
     const bucketRows = (nodes, depth) => nodes.map(n => {
@@ -1817,7 +1835,19 @@ function pruneTree(nodes) {
 }
 /** Collapse a node whose only child is a single group: bucket → categories directly. */
 function flattenSingle(nodes) {
-  for (const n of nodes) if (n.children) { if (n.children.length === 1 && n.children[0].children) n.children = n.children[0].children; flattenSingle(n.children); }
+  for (const n of nodes) {
+    if (n.children) {
+      if (n.children.length === 1 && n.children[0].children) {
+        n.children = n.children[0].children;
+      } else if (n.children.length > 1) {
+        const sameIdx = n.children.findIndex(c => c.children && c.label.trim().toLowerCase() === n.label.trim().toLowerCase());
+        if (sameIdx >= 0 && n.children.filter(c => c.children && c.children.length > 0).length === 1) {
+          n.children = n.children[sameIdx].children;
+        }
+      }
+      flattenSingle(n.children);
+    }
+  }
   return nodes;
 }
 function expandableKeys(nodes, maxDepth = 99, depth = 0, out = []) {
@@ -1879,7 +1909,67 @@ function aggregate(entries, periods, keyFn) {
 }
 /** Category tree: bucket → group → category. valsOf(cat) returns per-period values. */
 function categoryTree(type, valsOf, scope, drillBase = {}) {
-  const cats = api.list('categories').filter(c => c.type === type);
+  let cats = api.list('categories').filter(c => c.type === type);
+  if (type === 'inflow' && typeof Store !== 'undefined' && Store.data?.fss_operation_receipts) {
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const existingNames = new Set(cats.map(c => norm(c.name)));
+    for (const r of Store.data.fss_operation_receipts) {
+      const rName = norm(r.receipt_name);
+      if (!rName.includes('operation receipts') && !rName.includes('operating receipts') && !existingNames.has(rName)) {
+        cats = [
+          ...cats,
+          {
+            id: 'op_rec_' + r.id,
+            name: r.receipt_name,
+            type: 'inflow',
+            group: 'Operating Receipts',
+            bucket: 'op_rec'
+          }
+        ];
+        existingNames.add(rName);
+      }
+    }
+  }
+  if (type === 'inflow' && typeof Store !== 'undefined' && Store.data?.fss_financing) {
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const existingNames = new Set(cats.map(c => norm(c.name)));
+    for (const r of Store.data.fss_financing) {
+      const rName = norm(r.financing_name);
+      if (!rName.includes('financing total') && rName !== 'financing' && !existingNames.has(rName)) {
+        cats = [
+          ...cats,
+          {
+            id: 'fin_' + r.id,
+            name: r.financing_name,
+            type: 'inflow',
+            group: 'Financing',
+            bucket: 'fin_in'
+          }
+        ];
+        existingNames.add(rName);
+      }
+    }
+  }
+  if (type === 'inflow' && typeof Store !== 'undefined' && Store.data?.fss_income) {
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const existingNames = new Set(cats.map(c => norm(c.name)));
+    for (const r of Store.data.fss_income) {
+      const rName = norm(r.income_name);
+      if (!rName.includes('total') && rName !== 'other income' && !existingNames.has(rName)) {
+        cats = [
+          ...cats,
+          {
+            id: 'oth_inc_' + r.id,
+            name: r.income_name,
+            type: 'inflow',
+            group: 'Other Income',
+            bucket: 'oth_inc'
+          }
+        ];
+        existingNames.add(rName);
+      }
+    }
+  }
   const nodes = BUCKETS[type].map(([bid, bl]) => {
     const bc = cats.filter(c => bucketOf(c) === bid);
     return {
@@ -1892,7 +1982,364 @@ function categoryTree(type, valsOf, scope, drillBase = {}) {
   });
   return nodes;
 }
-function finishTree(nodes, len) { flattenSingle(nodes); sumTree(nodes, len); const p = pruneTree(nodes); p.forEach(n => n.count = countLeaves(n) > 1 ? countLeaves(n) : 0); return p; }
+function finishTree(nodes, len) {
+  flattenSingle(nodes);
+  sumTree(nodes, len);
+  const p = pruneTree(nodes);
+  flattenSingle(p);
+  for (const n of p) {
+    if (n.children && n.children.length === 1 && n.children[0].children) {
+      n.children = n.children[0].children;
+    }
+  }
+  p.forEach(n => n.count = countLeaves(n) > 1 ? countLeaves(n) : 0);
+  return p;
+}
+
+/** Computes rows formatted for Supabase fss_operation_receipts and fss_income */
+function computeCashflowInflowRows(entries: any[], fy = 2026) {
+  const currentFy = fy || (typeof S !== 'undefined' && S.fy) || 2026;
+  const periods = typeof fyPeriods === 'function' ? fyPeriods(currentFy, 'monthly') : [];
+  const len = periods.length;
+  const [fyF, fyT] = typeof fyRange === 'function' ? fyRange(currentFy) : ['2026-04-01', '2027-03-31'];
+  const lastTo = len ? periods[len - 1].to : fyF;
+
+  // Active entries within the financial year to date
+  const allEntries = entries || (typeof api !== 'undefined' && typeof api.list === 'function' ? api.list('entries') : []) || [];
+  const activeEntries = allEntries.filter((e: any) => !e.deleted && e.type !== 'transfer' && (!fyF || e.date >= fyF) && (!fyT || e.date <= fyT));
+  const activeInflows = activeEntries.filter((e: any) => e.type === 'inflow');
+
+  // Month columns: User specified that jan_26, feb_26, mar_26 should remain empty (0.00),
+  // and values should be stored from apr_26, may_26, jun_26, jul_26, aug_26, sep_26, oct_26, nov_26, dec_26
+  const monthCols = [
+    { col: 'jan_26', ym: null },
+    { col: 'feb_26', ym: null },
+    { col: 'mar_26', ym: null },
+    { col: 'apr_26', ym: '2026-04' },
+    { col: 'may_26', ym: '2026-05' },
+    { col: 'jun_26', ym: '2026-06' },
+    { col: 'jul_26', ym: '2026-07' },
+    { col: 'aug_26', ym: '2026-08' },
+    { col: 'sep_26', ym: '2026-09' },
+    { col: 'oct_26', ym: '2026-10' },
+    { col: 'nov_26', ym: '2026-11' },
+    { col: 'dec_26', ym: '2026-12' },
+  ];
+
+  // Try extracting directly from categoryTree / finishTree if available for 100% UI consistency
+  let treeInflow: any[] | null = null;
+  if (typeof categoryTree === 'function' && typeof finishTree === 'function' && typeof aggregate === 'function') {
+    try {
+      const agg = aggregate(activeInflows, periods, (e: any) => e.categoryId);
+      treeInflow = finishTree(categoryTree('inflow', (c: any) => agg[c.id] || periods.map(() => 0), 'cf:category:'), len);
+    } catch {
+      treeInflow = null;
+    }
+  }
+
+  // If treeInflow is available, extract nodes
+  let designNode: any = null;
+  let engNode: any = null;
+  let consultNode: any = null;
+  let retainNode: any = null;
+  let opRecNode: any = null;
+  let otherIncNode: any = null;
+  let fdNode: any = null;
+  let pureOtherNode: any = null;
+  let finNode: any = null;
+  let capNode: any = null;
+  let loanNode: any = null;
+
+  if (treeInflow && treeInflow.length > 0) {
+    opRecNode = treeInflow.find((n: any) => n.key?.includes('op_rec') || (n.label || '').toLowerCase().includes('operating receipts'));
+    const children = opRecNode?.children || [];
+    designNode = children.find((c: any) => (c.label || '').toLowerCase().includes('design'));
+    engNode = children.find((c: any) => (c.label || '').toLowerCase().includes('engineering'));
+    consultNode = children.find((c: any) => (c.label || '').toLowerCase().includes('consulting'));
+    retainNode = children.find((c: any) => (c.label || '').toLowerCase().includes('retainer'));
+
+    otherIncNode = treeInflow.find((n: any) => n.key?.includes('oth_inc') || (n.label || '').toLowerCase().includes('other income'));
+    const othChildren = otherIncNode?.children || [];
+    fdNode = othChildren.find((c: any) => (c.label || '').toLowerCase().includes('fd') || (c.label || '').toLowerCase().includes('interest'));
+    pureOtherNode = othChildren.find((c: any) => c !== fdNode && ((c.label || '').toLowerCase().includes('other') || !((c.label || '').toLowerCase().includes('fd') || (c.label || '').toLowerCase().includes('interest'))));
+
+    finNode = treeInflow.find((n: any) => n.key?.includes('fin_in') || (n.label || '').toLowerCase().includes('financing'));
+    const finChildren = finNode?.children || [];
+    capNode = finChildren.find((c: any) => (c.label || '').toLowerCase().includes('capital') || (c.label || '').toLowerCase().includes('funding') || (c.label || '').toLowerCase().includes('infusion'));
+    loanNode = finChildren.find((c: any) => (c.label || '').toLowerCase().includes('loan'));
+  }
+
+  // Helper to extract monthly amounts from node or fallback
+  const getMonthlyFromNodeOrFilter = (node: any, filterFn: (e: any) => boolean) => {
+    const result: Record<string, number> = {};
+    for (const m of monthCols) {
+      if (!m.ym) {
+        // jan_26, feb_26, mar_26 kept empty / 0
+        result[m.col] = 0;
+        continue;
+      }
+      if (node && periods && periods.length > 0) {
+        const pIdx = periods.findIndex((p: any) => p.months && p.months.includes(m.ym));
+        if (pIdx !== -1 && node.vals && node.vals[pIdx] != null) {
+          result[m.col] = Math.round(Number(node.vals[pIdx]) * 100) / 100;
+          continue;
+        }
+      }
+      // Fallback
+      const total = activeInflows
+        .filter((e: any) => {
+          if (!filterFn(e)) return false;
+          return (e.date || '').slice(0, 7) === m.ym;
+        })
+        .reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
+      result[m.col] = Math.round(total * 100) / 100;
+    }
+    return result;
+  };
+
+  const isDesign = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || '').toLowerCase();
+    return cid === 'cat_rdesign' || cname.includes('design');
+  };
+  const isEng = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || '').toLowerCase();
+    return cid === 'cat_reng' || cname.includes('engineering');
+  };
+  const isConsult = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || '').toLowerCase();
+    return cid === 'cat_consult' || cname.includes('consulting');
+  };
+  const isRetain = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || '').toLowerCase();
+    return cid === 'cat_retain' || cname.includes('retainer');
+  };
+  const isFd = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || e.description || '').toLowerCase();
+    return cid === 'cat_fdint' || cname.includes('interest') || cname.includes('fd');
+  };
+  const isPureOther = (e: any) => {
+    if (isFd(e)) return false;
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || e.description || '').toLowerCase();
+    return cid === 'cat_othinc' || cname.includes('other income') || bucketOf(api.get('categories', e.categoryId)) === 'oth_inc';
+  };
+  const isCapital = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || e.description || '').toLowerCase();
+    return cid === 'cat_capital' || cname.includes('capital') || cname.includes('infusion') || cname.includes('funding');
+  };
+  const isLoan = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || e.description || '').toLowerCase();
+    return cid === 'cat_loanin' || cname.includes('loan received') || (cname.includes('loan') && e.type === 'inflow');
+  };
+
+  const design = getMonthlyFromNodeOrFilter(designNode, isDesign);
+  const eng = getMonthlyFromNodeOrFilter(engNode, isEng);
+  const consult = getMonthlyFromNodeOrFilter(consultNode, isConsult);
+  const retain = getMonthlyFromNodeOrFilter(retainNode, isRetain);
+
+  const opReceipts: Record<string, number> = {};
+  for (const m of monthCols) {
+    if (!m.ym) {
+      opReceipts[m.col] = 0;
+    } else if (opRecNode && periods && periods.length > 0) {
+      const pIdx = periods.findIndex((p: any) => p.months && p.months.includes(m.ym));
+      if (pIdx !== -1 && opRecNode.vals && opRecNode.vals[pIdx] != null) {
+        opReceipts[m.col] = Math.round(Number(opRecNode.vals[pIdx]) * 100) / 100;
+      } else {
+        opReceipts[m.col] = Math.round(((design[m.col] || 0) + (eng[m.col] || 0) + (consult[m.col] || 0) + (retain[m.col] || 0)) * 100) / 100;
+      }
+    } else {
+      opReceipts[m.col] = Math.round(((design[m.col] || 0) + (eng[m.col] || 0) + (consult[m.col] || 0) + (retain[m.col] || 0)) * 100) / 100;
+    }
+  }
+
+  const fdInt = getMonthlyFromNodeOrFilter(fdNode, isFd);
+  const pureOther = getMonthlyFromNodeOrFilter(pureOtherNode, isPureOther);
+
+  const otherIncTotal: Record<string, number> = {};
+  for (const m of monthCols) {
+    if (!m.ym) {
+      pureOther[m.col] = 0;
+      otherIncTotal[m.col] = 0;
+    } else {
+      if (otherIncNode && periods && periods.length > 0) {
+        const pIdx = periods.findIndex((p: any) => p.months && p.months.includes(m.ym));
+        if (pIdx !== -1 && otherIncNode.vals && otherIncNode.vals[pIdx] != null) {
+          otherIncTotal[m.col] = Math.round(Number(otherIncNode.vals[pIdx]) * 100) / 100;
+          pureOther[m.col] = Math.max(0, Math.round(((otherIncTotal[m.col] || 0) - (fdInt[m.col] || 0)) * 100) / 100);
+          continue;
+        }
+      }
+      otherIncTotal[m.col] = Math.round(((fdInt[m.col] || 0) + (pureOther[m.col] || 0)) * 100) / 100;
+    }
+  }
+
+  const capital = getMonthlyFromNodeOrFilter(capNode, isCapital);
+  const loan = getMonthlyFromNodeOrFilter(loanNode, isLoan);
+
+  const finTotal: Record<string, number> = {};
+  for (const m of monthCols) {
+    if (!m.ym) {
+      capital[m.col] = 0;
+      finTotal[m.col] = 0;
+    } else {
+      if (finNode && periods && periods.length > 0) {
+        const pIdx = periods.findIndex((p: any) => p.months && p.months.includes(m.ym));
+        if (pIdx !== -1 && finNode.vals && finNode.vals[pIdx] != null) {
+          finTotal[m.col] = Math.round(Number(finNode.vals[pIdx]) * 100) / 100;
+          capital[m.col] = Math.max(0, Math.round(((finTotal[m.col] || 0) - (loan[m.col] || 0)) * 100) / 100);
+          continue;
+        }
+      }
+      finTotal[m.col] = Math.round(((capital[m.col] || 0) + (loan[m.col] || 0)) * 100) / 100;
+    }
+  }
+
+  const sumCols = (row: Record<string, number>) => monthCols.reduce((acc, m) => acc + (row[m.col] || 0), 0);
+
+  const designFy = sumCols(design);
+  const engFy = sumCols(eng);
+  const consultFy = sumCols(consult);
+  const retainFy = sumCols(retain);
+  let opReceiptsFy = sumCols(opReceipts);
+
+  const fdIntFy = sumCols(fdInt);
+  const pureOtherFy = sumCols(pureOther);
+  let otherIncTotalFy = sumCols(otherIncTotal);
+
+  const capitalFy = sumCols(capital);
+  const loanFy = sumCols(loan);
+  let finTotalFy = sumCols(finTotal);
+
+  const extraOpRows: any[] = [];
+  if (typeof Store !== 'undefined' && Store.data?.fss_operation_receipts) {
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const standardNames = ['project receipts - design', 'project receipts - engineering', 'consulting fees', 'retainers', 'operation receipts', 'operating receipts'];
+    for (const r of Store.data.fss_operation_receipts) {
+      const rName = norm(r.receipt_name);
+      if (!standardNames.some(s => rName.includes(s))) {
+        const rowData: Record<string, number> = {};
+        for (const m of monthCols) {
+          rowData[m.col] = m.ym ? Number(r[m.col] || 0) : 0;
+        }
+        const rowFy = sumCols(rowData);
+        extraOpRows.push({
+          id: r.id,
+          receipt_name: r.receipt_name,
+          ...rowData,
+          last_fy_to_date: 0,
+          fy_to_date: rowFy
+        });
+      }
+    }
+  }
+
+  const extraFinRows: any[] = [];
+  if (typeof Store !== 'undefined' && Store.data?.fss_financing) {
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const standardFin = ['capital infusion / funding', 'loan received', 'financing total', 'financing'];
+    for (const r of Store.data.fss_financing) {
+      const rName = norm(r.financing_name);
+      if (!standardFin.some(s => rName.includes(s))) {
+        const rowData: Record<string, number> = {};
+        for (const m of monthCols) {
+          rowData[m.col] = m.ym ? Number(r[m.col] || 0) : 0;
+        }
+        const rowFy = sumCols(rowData);
+        extraFinRows.push({
+          id: r.id,
+          financing_name: r.financing_name,
+          ...rowData,
+          fy_to_date: rowFy
+        });
+      }
+    }
+  }
+
+  const extraIncRows: any[] = [];
+  if (typeof Store !== 'undefined' && Store.data?.fss_income) {
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const standardInc = ['fd / bank interest', 'fd interest', 'bank interest', 'other income', 'other income total'];
+    for (const r of Store.data.fss_income) {
+      const rName = norm(r.income_name);
+      if (!standardInc.some(s => rName.includes(s))) {
+        const rowData: Record<string, number> = {};
+        for (const m of monthCols) {
+          rowData[m.col] = m.ym ? Number(r[m.col] || 0) : 0;
+        }
+        const rowFy = sumCols(rowData);
+        extraIncRows.push({
+          id: r.id,
+          income_name: r.income_name,
+          ...rowData,
+          fy_to_date: rowFy
+        });
+      }
+    }
+  }
+
+  for (const m of monthCols) {
+    if (m.ym && extraOpRows.length > 0) {
+      opReceipts[m.col] = Math.round(((opReceipts[m.col] || 0) + extraOpRows.reduce((sum, r) => sum + (r[m.col] || 0), 0)) * 100) / 100;
+    }
+    if (m.ym && extraIncRows.length > 0) {
+      otherIncTotal[m.col] = Math.round(((otherIncTotal[m.col] || 0) + extraIncRows.reduce((sum, r) => sum + (r[m.col] || 0), 0)) * 100) / 100;
+    }
+    if (m.ym && extraFinRows.length > 0) {
+      finTotal[m.col] = Math.round(((finTotal[m.col] || 0) + extraFinRows.reduce((sum, r) => sum + (r[m.col] || 0), 0)) * 100) / 100;
+    }
+  }
+  opReceiptsFy = sumCols(opReceipts);
+  otherIncTotalFy = sumCols(otherIncTotal);
+  finTotalFy = sumCols(finTotal);
+
+  const totalInflowFy = Math.round(((opReceiptsFy || 0) + (otherIncTotalFy || 0) + (finTotalFy || 0)) * 100) / 100;
+  const calcShare = (val: number) => totalInflowFy > 0 ? Math.round((val / totalInflowFy) * 1000) / 10 : 0;
+
+  extraOpRows.forEach(r => r.share = calcShare(r.fy_to_date));
+  extraIncRows.forEach(r => r.share = calcShare(r.fy_to_date));
+  extraFinRows.forEach(r => r.share = calcShare(r.fy_to_date));
+
+  const totalOpId = Math.max(5, ...extraOpRows.map(r => Number(r.id) || 0)) + (extraOpRows.some(r => r.id === 5) ? 1 : 0);
+  const totalIncId = Math.max(3, ...extraIncRows.map(r => Number(r.id) || 0)) + (extraIncRows.some(r => r.id === 3) ? 1 : 0);
+  const totalFinId = Math.max(3, ...extraFinRows.map(r => Number(r.id) || 0)) + (extraFinRows.some(r => r.id === 3) ? 1 : 0);
+
+  const operationReceiptsRows = [
+    { id: 1, receipt_name: 'Project Receipts - Design', ...design, last_fy_to_date: 0, fy_to_date: designFy, share: calcShare(designFy) },
+    { id: 2, receipt_name: 'Project Receipts - Engineering', ...eng, last_fy_to_date: 0, fy_to_date: engFy, share: calcShare(engFy) },
+    { id: 3, receipt_name: 'Consulting Fees', ...consult, last_fy_to_date: 0, fy_to_date: consultFy, share: calcShare(consultFy) },
+    { id: 4, receipt_name: 'Retainers', ...retain, last_fy_to_date: 0, fy_to_date: retainFy, share: calcShare(retainFy) },
+    ...extraOpRows,
+    { id: totalOpId, receipt_name: 'Operation Receipts', ...opReceipts, last_fy_to_date: 0, fy_to_date: opReceiptsFy, share: calcShare(opReceiptsFy) }
+  ];
+
+  const incomeRows = [
+    { id: 1, income_name: 'FD / Bank Interest', ...fdInt, fy_to_date: fdIntFy, share: calcShare(fdIntFy) },
+    { id: 2, income_name: 'Other Income', ...pureOther, fy_to_date: pureOtherFy, share: calcShare(pureOtherFy) },
+    ...extraIncRows,
+    { id: totalIncId, income_name: 'Other Income Total', ...otherIncTotal, fy_to_date: otherIncTotalFy, share: calcShare(otherIncTotalFy) }
+  ];
+
+  const financingRows = [
+    { id: 1, financing_name: 'Capital Infusion / Funding', ...capital, fy_to_date: capitalFy, share: calcShare(capitalFy) },
+    { id: 2, financing_name: 'Loan Received', ...loan, fy_to_date: loanFy, share: calcShare(loanFy) },
+    ...extraFinRows,
+    { id: totalFinId, financing_name: 'Financing Total', ...finTotal, fy_to_date: finTotalFy, share: calcShare(finTotalFy) }
+  ];
+
+  return { operationReceiptsRows, incomeRows, financingRows, totalInflowFy };
+}
+
+if (typeof window !== 'undefined') {
+  (window as any).__computeCashflowInflowRows = computeCashflowInflowRows;
+}
 
 
 
@@ -1948,7 +2395,88 @@ PAGES.cashflow = {
       const te = ents.filter(e => e.type === type);
       if (C.by === 'category') {
         const agg = aggregate(te, periods, e => e.categoryId);
-        tree[type] = finishTree(categoryTree(type, c => agg[c.id] || periods.map(() => 0), scope), len);
+        const inflowValsOf = (c: any) => {
+          const opReceiptRows = (Store.data?.fss_operation_receipts || []).filter((r: any) => {
+            const name = (r.receipt_name || '').toLowerCase().trim();
+            return !name.includes('operation receipts') && !name.includes('operating receipts');
+          });
+          const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+          const matchOp = opReceiptRows.find((r: any) => {
+            const rName = norm(r.receipt_name);
+            const cName = norm(c.name);
+            return rName === cName ||
+              (c.id === 'cat_rdesign' && rName.includes('design')) ||
+              (c.id === 'cat_reng' && rName.includes('engineering')) ||
+              (c.id === 'cat_consult' && rName.includes('consulting')) ||
+              (c.id === 'cat_retain' && rName.includes('retainer'));
+          });
+          if (matchOp) {
+            const M_COL: Record<string, string> = {
+              '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
+              '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
+              '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
+              '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
+            };
+            return periods.map((p: any) => {
+              const m = p.months[0];
+              const col = M_COL[m.slice(5, 7)] || 'apr_26';
+              return Number(matchOp[col] ?? 0);
+            });
+          }
+
+          const finRows = (Store.data?.fss_financing || []).filter((r: any) => {
+            const name = (r.financing_name || '').toLowerCase().trim();
+            return !name.includes('financing total') && name !== 'financing';
+          });
+          const matchFin = finRows.find((r: any) => {
+            const rName = norm(r.financing_name);
+            const cName = norm(c.name);
+            return rName === cName ||
+              (c.id === 'cat_capital' && (rName.includes('capital') || rName.includes('funding') || rName.includes('infusion'))) ||
+              (c.id === 'cat_loanin' && rName.includes('loan'));
+          });
+          if (matchFin) {
+            const M_COL: Record<string, string> = {
+              '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
+              '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
+              '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
+              '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
+            };
+            return periods.map((p: any) => {
+              const m = p.months[0];
+              const col = M_COL[m.slice(5, 7)] || 'apr_26';
+              return Number(matchFin[col] ?? 0);
+            });
+          }
+
+          const incRows = (Store.data?.fss_income || []).filter((r: any) => {
+            const name = (r.income_name || '').toLowerCase().trim();
+            return !name.includes('total') && name !== 'other income';
+          });
+          const matchInc = incRows.find((r: any) => {
+            const rName = norm(r.income_name);
+            const cName = norm(c.name);
+            return rName === cName ||
+              (c.id === 'cat_fdint' && (rName.includes('fd') || rName.includes('interest'))) ||
+              (c.id === 'cat_othinc' && (rName.includes('other') || !rName.includes('fd')));
+          });
+          if (matchInc) {
+            const M_COL: Record<string, string> = {
+              '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
+              '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
+              '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
+              '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
+            };
+            return periods.map((p: any) => {
+              const m = p.months[0];
+              const col = M_COL[m.slice(5, 7)] || 'apr_26';
+              return Number(matchInc[col] ?? 0);
+            });
+          }
+
+          return agg[c.id] || periods.map(() => 0);
+        };
+        tree[type] = finishTree(categoryTree(type, type === 'inflow' ? inflowValsOf : (c => agg[c.id] || periods.map(() => 0)), scope), len);
       } else {
         const agg = aggregate(te, periods, e => (e.departmentId || '_none') + '|' + bucketOf(api.get('categories', e.categoryId)));
         const deps = [...api.list('departments'), { id: '_none', name: 'No department' }];
@@ -1963,7 +2491,67 @@ PAGES.cashflow = {
     const levels = C.by === 'category' ? [['summary', 'Summary'], ['1', 'Groups'], ['all', 'All lines']] : [['summary', 'Departments'], ['all', 'With buckets']];
     const tin = periods.map((_, i) => sum(tree.inflow, n => n.vals[i])), tout = periods.map((_, i) => sum(tree.outflow, n => n.vals[i]));
     const TIN = sum(tin), TOUT = sum(tout);
-    const cellsFor = (type, base) => (n, depth) => periods.map((p, i) => { const v = n.vals[i]; return `<td class="num ${v ? 'hit' : 'zero'} ${p.cur ? 'cur' : ''}" ${v && n.drill ? drillAttr(type, n.drill, p.from, p.to) : ''}>${v ? money(v) : '–'}</td>`; }).join('')
+    const M_COL_MAP: Record<string, string> = {
+      '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
+      '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
+      '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
+      '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
+    };
+    const cellsFor = (type, base) => (n, depth) => periods.map((p, i) => {
+      const v = n.vals[i];
+      const m = p.months[0];
+      const col = M_COL_MAP[m.slice(5, 7)] || 'apr_26';
+
+      let opAttrs = '';
+      if (type === 'inflow' && depth > 0 && Store.data?.fss_operation_receipts) {
+        const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+        const rName = norm(n.label);
+        const matchOp = Store.data.fss_operation_receipts.find((r: any) => {
+          const name = norm(r.receipt_name);
+          return name === rName ||
+            (n.drill?.categoryId === 'cat_rdesign' && name.includes('design')) ||
+            (n.drill?.categoryId === 'cat_reng' && name.includes('engineering')) ||
+            (n.drill?.categoryId === 'cat_consult' && name.includes('consulting')) ||
+            (n.drill?.categoryId === 'cat_retain' && name.includes('retainer'));
+        });
+        if (matchOp && !matchOp.receipt_name.toLowerCase().includes('operation receipts')) {
+          opAttrs = `data-op-id="${matchOp.id}" data-op-col="${col}" data-op-val="${v || 0}" data-op-name="${esc(matchOp.receipt_name)}"`;
+        }
+      }
+
+      let finAttrs = '';
+      if (type === 'inflow' && depth > 0 && Store.data?.fss_financing) {
+        const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+        const rName = norm(n.label);
+        const matchFin = Store.data.fss_financing.find((r: any) => {
+          const name = norm(r.financing_name);
+          return name === rName ||
+            (n.drill?.categoryId === 'cat_capital' && (name.includes('capital') || name.includes('funding') || name.includes('infusion'))) ||
+            (n.drill?.categoryId === 'cat_loanin' && name.includes('loan'));
+        });
+        if (matchFin && !matchFin.financing_name.toLowerCase().includes('financing total') && matchFin.financing_name.toLowerCase() !== 'financing') {
+          finAttrs = `data-fin-id="${matchFin.id}" data-fin-col="${col}" data-fin-val="${v || 0}" data-fin-name="${esc(matchFin.financing_name)}"`;
+        }
+      }
+
+      let incAttrs = '';
+      if (type === 'inflow' && depth > 0 && Store.data?.fss_income) {
+        const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+        const rName = norm(n.label);
+        const matchInc = Store.data.fss_income.find((r: any) => {
+          const name = norm(r.income_name);
+          return name === rName ||
+            (n.drill?.categoryId === 'cat_fdint' && (name.includes('fd') || name.includes('interest'))) ||
+            (n.drill?.categoryId === 'cat_othinc' && (name.includes('other') || !name.includes('fd')));
+        });
+        if (matchInc && !matchInc.income_name.toLowerCase().includes('total') && matchInc.income_name.toLowerCase() !== 'other income total') {
+          incAttrs = `data-inc-id="${matchInc.id}" data-inc-col="${col}" data-inc-val="${v || 0}" data-inc-name="${esc(matchInc.income_name)}"`;
+        }
+      }
+
+      const cellClass = `num ${v ? 'hit' : 'zero'} ${p.cur ? 'cur' : ''} ${opAttrs ? 'op-cell' : ''} ${finAttrs ? 'fin-cell' : ''} ${incAttrs ? 'inc-cell' : ''}`;
+      return `<td class="${cellClass}" ${v && n.drill ? drillAttr(type, n.drill, p.from, p.to) : ''} ${opAttrs} ${finAttrs} ${incAttrs}>${v ? money(v) : '–'}</td>`;
+    }).join('')
       + `<td class="num tot-c" ${n.drill ? drillAttr(type, n.drill, fyF, lastTo) : ''}>${money(sum(n.vals))}</td><td class="num share"><span class="${depth ? 'faint' : 'muted'}">${fmtPct(pct(sum(n.vals), base))}</span></td>`;
     const balCells = vals => periods.map((p, i) => `<td class="num ${p.cur ? 'cur' : ''} ${vals[i] < 0 ? 'out' : ''}">${money(vals[i])}</td>`).join('') + '<td class="num tot-c"></td><td></td>';
     const opening = periods.map(p => Calc.cash(addDays(p.from, -1))), closing = periods.map(p => Calc.cash(p.to < TODAY ? p.to : TODAY));
@@ -2594,7 +3182,13 @@ function quickParty(kind, cb) {
     try { api.guard('party.create'); const p = await api.create('parties', rec); ov.remove(); toast('Added ' + name); cb(p); } catch (err) { toast(err.message, 'error'); }
   });
 }
-function afterWrite() { closeDrawer(); render(); }
+function afterWrite() {
+  closeDrawer();
+  render();
+  if (typeof window !== 'undefined' && typeof (window as any).__onCashflowDataChanged === 'function') {
+    (window as any).__onCashflowDataChanged();
+  }
+}
 
 /* ============================ REPORTS ============================ */
 const REPORT_TABS = [['parties', 'Parties'], ['projects', 'Projects'], ['departments', 'Departments'], ['categories', 'Category trends'], ['tax', 'GST & TDS'], ['burn', 'Burn & runway'], ['forecast', 'Forecast']];
@@ -3419,6 +4013,79 @@ let _globalBound = false;
 function bindGlobal() {
   if (_globalBound) return;
   _globalBound = true;
+  document.addEventListener('dblclick', async (ev: any) => {
+    const opTd = ev.target?.closest?.('td.op-cell');
+    const finTd = ev.target?.closest?.('td.fin-cell');
+    const incTd = ev.target?.closest?.('td.inc-cell');
+    const td = opTd || finTd || incTd;
+    if (!td || td.querySelector('input')) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    const isFin = !!finTd;
+    const isInc = !!incTd;
+    const rowId = isFin ? td.dataset.finId : isInc ? td.dataset.incId : td.dataset.opId;
+    const col = isFin ? td.dataset.finCol : isInc ? td.dataset.incCol : td.dataset.opCol;
+    const rowName = isFin ? (td.dataset.finName || 'Financing') : isInc ? (td.dataset.incName || 'Income') : (td.dataset.opName || 'Receipt');
+    const initialVal = isFin ? (td.dataset.finVal || '0') : isInc ? (td.dataset.incVal || '0') : (td.dataset.opVal || '0');
+    const origHTML = td.innerHTML;
+
+    td.innerHTML = `<input type="number" step="any" class="${isFin ? 'fin-inline-input' : isInc ? 'inc-inline-input' : 'op-inline-input'}" value="${Number(initialVal) || ''}" placeholder="0" style="width:100%;min-width:70px;text-align:right;background:var(--surface);border:1px solid var(--accent, #1E7A4F);color:var(--ink);border-radius:4px;padding:2px 4px;font-family:inherit;font-size:inherit;font-weight:600;outline:none;box-sizing:border-box;" />`;
+    const inp = td.querySelector('input');
+    if (!inp) return;
+    inp.focus();
+    inp.select();
+
+    let committed = false;
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      const raw = inp.value.trim();
+      const newVal = raw === '' ? 0 : Number(raw);
+      if (isNaN(newVal) || newVal < 0) {
+        td.innerHTML = origHTML;
+        return;
+      }
+      if (newVal === Number(initialVal)) {
+        td.innerHTML = origHTML;
+        return;
+      }
+
+      td.innerHTML = `<span style="opacity:0.6">${money(newVal)}</span>`;
+      try {
+        if (isFin && typeof (window as any).__updateFinancingCell === 'function') {
+          await (window as any).__updateFinancingCell(rowId, col, newVal);
+          toast(`Updated ${rowName}`);
+        } else if (isInc && typeof (window as any).__updateIncomeCell === 'function') {
+          await (window as any).__updateIncomeCell(rowId, col, newVal);
+          toast(`Updated ${rowName}`);
+        } else if (!isFin && !isInc && typeof (window as any).__updateOperationReceiptCell === 'function') {
+          await (window as any).__updateOperationReceiptCell(rowId, col, newVal);
+          toast(`Updated ${rowName}`);
+        } else {
+          td.innerHTML = origHTML;
+        }
+      } catch (err: any) {
+        toast(`Failed to save: ${err.message}`, 'error');
+        td.innerHTML = origHTML;
+      }
+    };
+
+    inp.addEventListener('keydown', (e: any) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        inp.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        committed = true;
+        td.innerHTML = origHTML;
+      }
+    });
+
+    inp.addEventListener('blur', () => {
+      commit();
+    });
+  });
   document.addEventListener('click', ev => {
     const el = ev.target.closest('[data-act]'); if (!el) return;
     const fn = ACT[el.dataset.act]; if (!fn) return;
@@ -6522,7 +7189,8 @@ export {
   fyOf,
   ROLES,
   ACT,
-  IC
+  IC,
+  computeCashflowInflowRows
 };
 
 if (typeof window !== 'undefined') {

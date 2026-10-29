@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { boot, go, route, render, S, api, Store, FileStore } from './lib/coreEngine';
+import { boot, go, route, render, S, api, Store, FileStore, computeCashflowInflowRows } from './lib/coreEngine';
 import { SupabaseService, isSupabaseConfigured, STATE_NAME_TO_CODE, STATE_CODE_TO_NAME } from './lib/supabase';
 import { AddClientModal } from './components/AddClientModal';
 import { AddVendorModal } from './components/AddVendorModal';
@@ -27,6 +27,10 @@ export interface CloudStatus {
   categoryCount?: number;
   orderCount?: number;
   transactionCount?: number;
+  operationReceiptCount?: number;
+  incomeCount?: number;
+  financingCount?: number;
+  cashInflowCount?: number;
 }
 
 // Convert Supabase fss_client and fss_client_people rows into CRM party format
@@ -289,13 +293,21 @@ export function convertFssCategoryToLocal(sc: any, existingCategories: any[] = [
   if (rawBucket) {
     const lb = rawBucket.toLowerCase();
     if (lb.includes('project costs')) bucket = 'proj_cost';
-    else if (lb.includes('tax & statutory')) bucket = 'tax';
+    else if (lb.includes('tax') || lb.includes('statutory')) bucket = 'tax';
     else if (lb.includes('capex')) bucket = 'capex';
-    else if (lb.includes('financing & owner')) bucket = 'fin_out';
+    else if (lb.includes('financing & owner') || (type === 'outflow' && lb.includes('financing'))) bucket = 'fin_out';
     else if (lb.includes('operating receipts')) bucket = 'op_rec';
     else if (lb.includes('other income')) bucket = 'oth_inc';
-    else if (lb.includes('financing (inflow)')) bucket = 'fin_in';
+    else if (lb.includes('financing (inflow)') || (type === 'inflow' && lb.includes('financing'))) bucket = 'fin_in';
     else if (lb.includes('operating costs')) bucket = 'op_cost';
+  }
+  if (!bucket) {
+    if (type === 'inflow') {
+      bucket = (kind === 'financing' || (sc.category_name || '').toLowerCase().includes('loan') || (sc.category_name || '').toLowerCase().includes('capital')) ? 'fin_in' : (group.toLowerCase().includes('other income') ? 'oth_inc' : 'op_rec');
+    } else {
+      if (group === 'Project Costs') bucket = 'proj_cost';
+      else bucket = ({ tax: 'tax', capex: 'capex', financing: 'fin_out' } as any)[kind] || 'op_cost';
+    }
   }
 
   const tdsSection = sc.fss_category_tds_section?.code || match?.tdsSection || '';
@@ -1395,6 +1407,108 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Hydrate Cashflow Inflow from Supabase (fss_operation_receipts, fss_income, fss_cash_inflow)
+  const loadSupabaseCashflowTables = useCallback(async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+      let result = await SupabaseService.loadAllCashflowInflowFromSupabase();
+
+      // If tables are empty in Supabase, auto-seed with computed local UI cashflow
+      const currentFy = (typeof S !== 'undefined' && S.fy) ? S.fy : 2026;
+      if (
+        result.operationReceipts.length === 0 &&
+        result.income.length === 0 &&
+        result.financing.length === 0 &&
+        Store.data?.entries
+      ) {
+        console.log('Cashflow tables empty in Supabase. Auto-syncing initial UI cashflow to Supabase...');
+        const computed = computeCashflowInflowRows(Store.data.entries, currentFy);
+        if (computed) {
+          result = await SupabaseService.syncCashflowInflowToSupabase({
+            operationReceipts: computed.operationReceiptsRows,
+            income: computed.incomeRows,
+            financing: computed.financingRows
+          });
+        }
+      }
+
+      if (Store.data) {
+        Store.data.fss_operation_receipts = result.operationReceipts;
+        Store.data.fss_income = result.income;
+        Store.data.fss_financing = result.financing;
+        Store.data.fss_cash_inflow = result.cashInflow;
+
+        // Auto-heal if Supabase ever differs from UI (e.g. outdated fy_to_date, share, or jan_26 > 0)
+        const computed = Store.data?.entries
+          ? computeCashflowInflowRows(Store.data.entries, currentFy)
+          : null;
+
+        const hasDiscrepancy = computed && (
+          (result.operationReceipts || []).some((r: any) => {
+            const compRow = (computed.operationReceiptsRows as any[])?.find((c: any) => c.id === r.id);
+            return compRow && (
+              Number(r.fy_to_date) !== Number(compRow.fy_to_date) ||
+              Math.abs(Number(r.share) - Number(compRow.share)) > 0.05 ||
+              Number(r.jan_26) > 0 ||
+              Number(r.oct_26) !== Number(compRow.oct_26)
+            );
+          }) ||
+          (result.income || []).some((r: any) => {
+            const compRow = (computed.incomeRows as any[])?.find((c: any) => c.id === r.id);
+            return compRow && (
+              Number(r.fy_to_date) !== Number(compRow.fy_to_date) ||
+              Math.abs(Number(r.share) - Number(compRow.share)) > 0.05 ||
+              Number(r.oct_26) !== Number(compRow.oct_26)
+            );
+          }) ||
+          (result.financing || []).some((r: any) => {
+            const compRow = (computed.financingRows as any[])?.find((c: any) => c.id === r.id);
+            return compRow && (
+              Number(r.fy_to_date) !== Number(compRow.fy_to_date) ||
+              Math.abs(Number(r.share) - Number(compRow.share)) > 0.05 ||
+              Number(r.jan_26) > 0 ||
+              Number(r.oct_26) !== Number(compRow.oct_26)
+            );
+          })
+        );
+
+        if (hasDiscrepancy && computed) {
+          result = await SupabaseService.syncCashflowInflowToSupabase({
+            operationReceipts: computed.operationReceiptsRows,
+            income: computed.incomeRows,
+            financing: computed.financingRows
+          });
+          Store.data.fss_operation_receipts = result.operationReceipts;
+          Store.data.fss_income = result.income;
+          Store.data.fss_financing = result.financing;
+          Store.data.fss_cash_inflow = result.cashInflow;
+        }
+        render({ keepScroll: true });
+      }
+
+      setCloudStatus(prev => ({
+        ...prev,
+        connected: true,
+        syncing: false,
+        operationReceiptCount: result.operationReceipts.length,
+        incomeCount: result.income.length,
+        financingCount: result.financing.length,
+        cashInflowCount: result.cashInflow.length,
+        lastSynced: new Date().toLocaleTimeString(),
+        error: null
+      }));
+      return result;
+    } catch (err: any) {
+      console.error('Error syncing Supabase cashflow tables:', err);
+      setCloudStatus(prev => ({
+        ...prev,
+        syncing: false,
+        error: err.message || 'Error connecting to cashflow tables in Supabase'
+      }));
+    }
+  }, []);
+
   // Refresh all entities from Supabase
   const refreshAllFromSupabase = useCallback(async () => {
     await Promise.all([
@@ -1407,13 +1521,15 @@ export const App: React.FC = () => {
       loadSupabaseBankAccounts(),
       loadSupabaseCategories(),
       loadSupabaseOrders(),
-      loadSupabaseTransactions()
+      loadSupabaseTransactions(),
+      loadSupabaseCashflowTables()
     ]);
-  }, [loadSupabaseClients, loadSupabaseVendors, loadSupabaseEmployees, loadSupabaseOtherParties, loadSupabaseProjects, loadSupabaseDepartments, loadSupabaseBankAccounts, loadSupabaseCategories, loadSupabaseOrders, loadSupabaseTransactions]);
+  }, [loadSupabaseClients, loadSupabaseVendors, loadSupabaseEmployees, loadSupabaseOtherParties, loadSupabaseProjects, loadSupabaseDepartments, loadSupabaseBankAccounts, loadSupabaseCategories, loadSupabaseOrders, loadSupabaseTransactions, loadSupabaseCashflowTables]);
 
   // Initialize Core Application and Supabase
   useEffect(() => {
     let mounted = true;
+    let cashflowDebounceTimer: any = null;
 
     const init = async () => {
       // 1. Boot original application engine
@@ -1700,33 +1816,130 @@ export const App: React.FC = () => {
         return ok;
       };
 
-      // 11. Register global Supabase transaction saver for the core UI form
+      // 11. Register Supabase Cashflow Inflow Sync and Fetch handlers
+      let isSyncingCashflow = false;
+      let pendingSyncRequested = false;
+
+      const doSyncCashflowInflow = async () => {
+        if (!isSupabaseConfigured) return null;
+        try {
+          const currentFy = (typeof S !== 'undefined' && S.fy) ? S.fy : 2026;
+          const entriesList = Store.data?.entries || [];
+          const computed = computeCashflowInflowRows(entriesList, currentFy);
+          if (!computed) return null;
+
+          const payloads = {
+            operationReceipts: computed.operationReceiptsRows,
+            income: computed.incomeRows,
+            financing: computed.financingRows
+          };
+
+          const synced = await SupabaseService.syncCashflowInflowToSupabase(payloads);
+          if (Store.data) {
+            Store.data.fss_operation_receipts = synced.operationReceipts;
+            Store.data.fss_income = synced.income;
+            Store.data.fss_financing = synced.financing;
+            Store.data.fss_cash_inflow = synced.cashInflow;
+            // Suppress sync loop when updating local store with synced data
+            isSyncingCashflow = true;
+            try {
+              Store.persist();
+            } finally {
+              isSyncingCashflow = false;
+            }
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            operationReceiptCount: synced.operationReceipts.length,
+            incomeCount: synced.income.length,
+            financingCount: synced.financing.length,
+            cashInflowCount: synced.cashInflow.length,
+            lastSynced: new Date().toLocaleTimeString()
+          }));
+          return synced;
+        } catch (err: any) {
+          console.error('Error in doSyncCashflowInflow:', err);
+          throw err;
+        }
+      };
+
+      const triggerCashflowSync = async () => {
+        if (!isSupabaseConfigured) return;
+        if (isSyncingCashflow) {
+          pendingSyncRequested = true;
+          return;
+        }
+        try {
+          isSyncingCashflow = true;
+          pendingSyncRequested = false;
+          await doSyncCashflowInflow();
+        } catch (e) {
+          console.warn('Cashflow sync to Supabase failed:', e);
+        } finally {
+          isSyncingCashflow = false;
+          if (pendingSyncRequested) {
+            pendingSyncRequested = false;
+            setTimeout(() => triggerCashflowSync(), 150);
+          }
+        }
+      };
+
+      (window as any).__supabaseSyncCashflowInflow = triggerCashflowSync;
+
+      (window as any).__onCashflowDataChanged = () => {
+        if (!isSupabaseConfigured || isSyncingCashflow) return;
+        if (cashflowDebounceTimer) clearTimeout(cashflowDebounceTimer);
+        cashflowDebounceTimer = setTimeout(() => {
+          triggerCashflowSync();
+        }, 200);
+      };
+
+      // 12. Register global Supabase transaction saver for the core UI form
       (window as any).__supabaseSaveTransaction = async (entryData: any) => {
         if (!isSupabaseConfigured) {
           console.warn('Supabase is not configured yet in .env; saving in local offline mode.');
           return null;
         }
-        const res = await SupabaseService.saveTransaction(
-          entryData,
-          Store.data?.parties || [],
-          Store.data?.projects || [],
-          Store.data?.departments || [],
-          Store.data?.categories || [],
-          Store.data?.accounts || []
-        );
-        if (res) {
-          setCloudStatus(prev => ({
-            ...prev,
-            transactionCount: (prev.transactionCount || 0) + 1,
-            lastSynced: new Date().toLocaleTimeString()
-          }));
+        let res = null;
+        try {
+          res = await SupabaseService.saveTransaction(
+            entryData,
+            Store.data?.parties || [],
+            Store.data?.projects || [],
+            Store.data?.departments || [],
+            Store.data?.categories || [],
+            Store.data?.accounts || []
+          );
+          if (res) {
+            setCloudStatus(prev => ({
+              ...prev,
+              transactionCount: (prev.transactionCount || 0) + 1,
+              lastSynced: new Date().toLocaleTimeString()
+            }));
+          }
+        } catch (e) {
+          console.warn('saveTransaction error in fss_table_transactions:', e);
         }
+
+        // ALWAYS sync cashflow inflow tables so Supabase fss_income, fss_operation_receipts, and fss_financing update immediately
+        try {
+          await triggerCashflowSync();
+        } catch (e) {
+          console.warn('Cashflow sync failed:', e);
+        }
+
         return res;
       };
 
       (window as any).__supabaseCancelTransaction = async (idOrSupabaseId: string | number) => {
         if (!isSupabaseConfigured) return false;
-        return SupabaseService.cancelTransaction(idOrSupabaseId);
+        const res = await SupabaseService.cancelTransaction(idOrSupabaseId);
+        try {
+          await triggerCashflowSync();
+        } catch (e) {
+          console.warn('Cashflow sync failed:', e);
+        }
+        return res;
       };
 
       (window as any).__supabaseDeleteTransaction = async (idOrSupabaseId: string | number) => {
@@ -1739,7 +1952,139 @@ export const App: React.FC = () => {
             lastSynced: new Date().toLocaleTimeString()
           }));
         }
+        try {
+          await triggerCashflowSync();
+        } catch (e) {
+          console.warn('Cashflow sync failed:', e);
+        }
         return ok;
+      };
+
+      (window as any).__supabaseFetchCashflowInflow = async () => {
+        return loadSupabaseCashflowTables();
+      };
+
+      // Direct cell edit handler for Operating Receipts
+      (window as any).__updateOperationReceiptCell = async (idOrName: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateOperationReceiptCell(idOrName, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_operation_receipts = res.allRows;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateOperationReceiptCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Add new Operating Receipt entry
+      (window as any).__addOperationReceipt = async (receiptName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addOperationReceipt(receiptName, monthlyAmounts);
+          await loadSupabaseCashflowTables();
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addOperationReceipt:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Direct cell edit handler for Other Income
+      (window as any).__updateIncomeCell = async (idOrName: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateIncomeCell(idOrName, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_income = res.allRows;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateIncomeCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Add new Other Income entry
+      (window as any).__addIncome = async (incomeName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addIncome(incomeName, monthlyAmounts);
+          await loadSupabaseCashflowTables();
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addIncome:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Direct cell edit handler for Financing
+      (window as any).__updateFinancingCell = async (idOrName: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateFinancingCell(idOrName, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_financing = res.allRows;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateFinancingCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Add new Financing entry
+      (window as any).__addFinancing = async (financingName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addFinancing(financingName, monthlyAmounts);
+          await loadSupabaseCashflowTables();
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addFinancing:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
       };
 
       (window as any).openAddClientModal = () => setShowAddClientModal(true);
@@ -1751,7 +2096,7 @@ export const App: React.FC = () => {
       (window as any).openAddBankAccountModal = () => setShowAddBankAccountModal(true);
       (window as any).openAddCategoryModal = () => setShowAddCategoryModal(true);
 
-      // 12. Check connection and load data from fss tables
+      // 13. Check connection and load data from fss tables
       if (isSupabaseConfigured) {
         const isConn = await SupabaseService.testConnection();
         if (mounted) {
@@ -1769,7 +2114,8 @@ export const App: React.FC = () => {
             loadSupabaseBankAccounts(),
             loadSupabaseCategories(),
             loadSupabaseOrders(),
-            loadSupabaseTransactions()
+            loadSupabaseTransactions(),
+            loadSupabaseCashflowTables()
           ]);
         }
       }
@@ -1779,6 +2125,8 @@ export const App: React.FC = () => {
 
     return () => {
       mounted = false;
+      if (cashflowDebounceTimer) clearTimeout(cashflowDebounceTimer);
+      delete (window as any).__onCashflowDataChanged;
       delete (window as any).__supabaseSaveClient;
       delete (window as any).__supabaseDeleteClient;
       delete (window as any).__supabaseSaveVendor;
@@ -1800,6 +2148,14 @@ export const App: React.FC = () => {
       delete (window as any).__supabaseSaveTransaction;
       delete (window as any).__supabaseCancelTransaction;
       delete (window as any).__supabaseDeleteTransaction;
+      delete (window as any).__supabaseSyncCashflowInflow;
+      delete (window as any).__supabaseFetchCashflowInflow;
+      delete (window as any).__updateOperationReceiptCell;
+      delete (window as any).__addOperationReceipt;
+      delete (window as any).__updateIncomeCell;
+      delete (window as any).__addIncome;
+      delete (window as any).__updateFinancingCell;
+      delete (window as any).__addFinancing;
       delete (window as any).openAddClientModal;
       delete (window as any).openAddVendorModal;
       delete (window as any).openAddEmployeeModal;
@@ -1809,7 +2165,7 @@ export const App: React.FC = () => {
       delete (window as any).openAddBankAccountModal;
       delete (window as any).openAddCategoryModal;
     };
-  }, [loadSupabaseClients, loadSupabaseVendors, loadSupabaseEmployees, loadSupabaseOtherParties, loadSupabaseProjects, loadSupabaseDepartments, loadSupabaseBankAccounts, loadSupabaseCategories, loadSupabaseOrders, loadSupabaseTransactions]);
+  }, [loadSupabaseClients, loadSupabaseVendors, loadSupabaseEmployees, loadSupabaseOtherParties, loadSupabaseProjects, loadSupabaseDepartments, loadSupabaseBankAccounts, loadSupabaseCategories, loadSupabaseOrders, loadSupabaseTransactions, loadSupabaseCashflowTables]);
 
   return (
     <>
@@ -1924,10 +2280,11 @@ export const App: React.FC = () => {
                   Projects: <code>fss_projects</code>.<br />
                   Departments: <code>fss_departments</code>.<br />
                   Bank Accounts: <code>fss_bank_accounts</code>.<br />
-                  Categories: <code>fss_categories</code>.
+                  Categories: <code>fss_categories</code>.<br />
+                  Cashflow Inflow: <code>fss_operation_receipts</code> ({cloudStatus.operationReceiptCount ?? '—'}), <code>fss_income</code> ({cloudStatus.incomeCount ?? '—'}), <code>fss_financing</code> ({cloudStatus.financingCount ?? '—'}), <code>fss_cash_inflow</code> ({cloudStatus.cashInflowCount ?? '—'}).
                 </p>
                 <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--muted)' }}>
-                  Target tables: <code>public.fss_table_transactions</code>, <code>public.fss_table_orders</code>, <code>public.fss_client</code>, <code>public.fss_vendor</code>, <code>public.fss_employe</code>, <code>public.fss_other_parties</code>, <code>public.fss_projects</code>, <code>public.fss_departments</code>, <code>public.fss_bank_accounts</code>, <code>public.fss_categories</code>
+                  Target tables: <code>public.fss_operation_receipts</code>, <code>public.fss_income</code>, <code>public.fss_financing</code>, <code>public.fss_cash_inflow</code>, <code>public.fss_table_transactions</code>, <code>public.fss_table_orders</code>, <code>public.fss_client</code>, <code>public.fss_vendor</code>, <code>public.fss_employe</code>, <code>public.fss_other_parties</code>, <code>public.fss_projects</code>, <code>public.fss_departments</code>, <code>public.fss_bank_accounts</code>, <code>public.fss_categories</code>
                 </div>
               </div>
 

@@ -2614,6 +2614,1151 @@ export const SupabaseService = {
       }
     }
     return synced;
+  },
+
+  /**
+   * Loads all rows from public.fss_operation_receipts
+   */
+  async loadOperationReceiptsFromSupabase(): Promise<any[]> {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase
+        .from('fss_operation_receipts')
+        .select('*')
+        .order('id', { ascending: true });
+      if (error) {
+        console.error('Error loading fss_operation_receipts from Supabase:', error);
+        return [];
+      }
+      return data || [];
+    } catch (err) {
+      console.error('Exception loading fss_operation_receipts from Supabase:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Loads all rows from public.fss_income
+   */
+  async loadIncomeFromSupabase(): Promise<any[]> {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase
+        .from('fss_income')
+        .select('*')
+        .order('id', { ascending: true });
+      if (error) {
+        console.error('Error loading fss_income from Supabase:', error);
+        return [];
+      }
+      return data || [];
+    } catch (err) {
+      console.error('Exception loading fss_income from Supabase:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Loads all rows from public.fss_financing
+   */
+  async loadFinancingFromSupabase(): Promise<any[]> {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase
+        .from('fss_financing')
+        .select('*')
+        .order('id', { ascending: true });
+      if (error) {
+        console.error('Error loading fss_financing from Supabase:', error);
+        return [];
+      }
+      return data || [];
+    } catch (err) {
+      console.error('Exception loading fss_financing from Supabase:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Loads all rows from public.fss_cash_inflow (view or table)
+   */
+  async loadCashInflowFromSupabase(): Promise<any[]> {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase
+        .from('fss_cash_inflow')
+        .select('*');
+      if (error) {
+        console.error('Error loading fss_cash_inflow from Supabase:', error);
+        return [];
+      }
+      return data || [];
+    } catch (err) {
+      console.error('Exception loading fss_cash_inflow from Supabase:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Loads all cashflow inflow tables in parallel
+   */
+  async loadAllCashflowInflowFromSupabase(): Promise<{
+    operationReceipts: any[];
+    income: any[];
+    financing: any[];
+    cashInflow: any[];
+  }> {
+    if (!supabase) {
+      return { operationReceipts: [], income: [], financing: [], cashInflow: [] };
+    }
+    const [operationReceipts, income, financing, cashInflow] = await Promise.all([
+      this.loadOperationReceiptsFromSupabase(),
+      this.loadIncomeFromSupabase(),
+      this.loadFinancingFromSupabase(),
+      this.loadCashInflowFromSupabase()
+    ]);
+    return { operationReceipts, income, financing, cashInflow };
+  },
+
+  /**
+   * Saves or updates a row into public.fss_operation_receipts using primary key id
+   */
+  async saveOperationReceipt(record: any): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const payload = { ...record };
+    delete payload.created_at;
+
+    if (payload.id) {
+      const { data: updated, error: updErr } = await supabase
+        .from('fss_operation_receipts')
+        .update(payload)
+        .eq('id', payload.id)
+        .select()
+        .maybeSingle();
+      if (!updErr && updated) return updated;
+    }
+
+    const { data: inserted, error: insErr } = await supabase
+      .from('fss_operation_receipts')
+      .insert(payload)
+      .select()
+      .single();
+    if (insErr) {
+      console.error('Error inserting into fss_operation_receipts:', insErr);
+      throw insErr;
+    }
+    return inserted;
+  },
+
+  /**
+   * Updates a single cell (month column) for an Income record in public.fss_income by id,
+   * recalculates the total row (Other Income Total), and returns the updated dataset.
+   * Note: fy_to_date is a Postgres generated column in fss_income, so it is never included in updates.
+   */
+  async updateIncomeCell(
+    idOrName: number | string,
+    monthCol: string,
+    newValue: number | string
+  ): Promise<{ updatedRow: any; totalRow: any; allRows: any[] }> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const validMonthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+    const cleanCol = (monthCol || '').toLowerCase().trim();
+    if (!validMonthCols.includes(cleanCol)) {
+      throw new Error(`Invalid month column: ${monthCol}`);
+    }
+
+    const numVal = Number(newValue);
+    const cleanVal = isNaN(numVal) || numVal < 0 ? 0 : Math.round(numVal * 100) / 100;
+
+    let targetId: number | null = typeof idOrName === 'number' ? idOrName : null;
+    if (!targetId && !isNaN(Number(idOrName))) {
+      targetId = Number(idOrName);
+    }
+
+    let currentRow: any = null;
+    if (targetId) {
+      const { data, error } = await supabase
+        .from('fss_income')
+        .select('*')
+        .eq('id', targetId)
+        .maybeSingle();
+      if (error) throw error;
+      currentRow = data;
+    } else {
+      const { data, error } = await supabase
+        .from('fss_income')
+        .select('*')
+        .ilike('income_name', String(idOrName).trim())
+        .maybeSingle();
+      if (error) throw error;
+      currentRow = data;
+      if (currentRow) targetId = currentRow.id;
+    }
+
+    if (!currentRow) {
+      throw new Error(`Record "${idOrName}" not found in fss_income.`);
+    }
+
+    // Do NOT include fy_to_date in payload as it is generated in fss_income
+    const payload: Record<string, any> = {
+      [cleanCol]: cleanVal
+    };
+
+    const { data: updated, error: updErr } = await supabase
+      .from('fss_income')
+      .update(payload)
+      .eq('id', currentRow.id)
+      .select()
+      .single();
+
+    if (updErr) {
+      console.error('Error updating fss_income record:', updErr);
+      throw updErr;
+    }
+
+    const { data: allRows } = await supabase
+      .from('fss_income')
+      .select('*')
+      .order('id', { ascending: true });
+
+    // Recalculate total row
+    const detailRows = (allRows || []).filter(
+      (r: any) => !r.income_name?.toLowerCase().includes('total') && r.id !== 3
+    );
+    const currentTotalRow = (allRows || []).find(
+      (r: any) => r.income_name?.toLowerCase().includes('total') || r.id === 3
+    );
+
+    let updatedTotalRow: any = null;
+    if (currentTotalRow) {
+      const tPayload: Record<string, any> = {};
+      for (const m of validMonthCols) {
+        const sumM = detailRows.reduce((acc: number, r: any) => acc + (Number(r[m]) || 0), 0);
+        tPayload[m] = Math.round(sumM * 100) / 100;
+      }
+      const { data: tUpdated } = await supabase
+        .from('fss_income')
+        .update(tPayload)
+        .eq('id', currentTotalRow.id)
+        .select()
+        .single();
+      updatedTotalRow = tUpdated;
+    }
+
+    const { data: freshRows } = await supabase
+      .from('fss_income')
+      .select('*')
+      .order('id', { ascending: true });
+
+    return {
+      updatedRow: updated,
+      totalRow: updatedTotalRow,
+      allRows: freshRows || []
+    };
+  },
+
+  /**
+   * Adds a new Income entry to public.fss_income
+   */
+  async addIncome(
+    incomeName: string,
+    monthlyAmounts: Record<string, number> = {}
+  ): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const trimmed = (incomeName || '').trim();
+    if (!trimmed) throw new Error('Income name is required.');
+
+    const isTotal = trimmed.toLowerCase().includes('total');
+    if (isTotal) {
+      throw new Error('Cannot add a record named "Total" as it is reserved for the subtotal.');
+    }
+
+    const validMonthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+
+    const { data: existing } = await supabase
+      .from('fss_income')
+      .select('*')
+      .ilike('income_name', trimmed);
+
+    if (existing && existing.length > 0) {
+      const ex = existing[0];
+      const payload: Record<string, any> = {};
+      for (const m of validMonthCols) {
+        if (monthlyAmounts[m] !== undefined) {
+          payload[m] = Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100;
+        } else {
+          payload[m] = Number(ex[m] || 0);
+        }
+      }
+      const { data: updated, error: updErr } = await supabase
+        .from('fss_income')
+        .update(payload)
+        .eq('id', ex.id)
+        .select()
+        .single();
+      if (updErr) throw updErr;
+      return updated;
+    }
+
+    const { data: maxIdRow } = await supabase
+      .from('fss_income')
+      .select('id')
+      .order('id', { ascending: false })
+      .limit(1);
+
+    const nextId = (maxIdRow && maxIdRow[0] && maxIdRow[0].id) ? maxIdRow[0].id + 1 : 1;
+
+    const insertPayload: Record<string, any> = {
+      id: nextId,
+      income_name: trimmed
+    };
+    for (const m of validMonthCols) {
+      const v = monthlyAmounts[m] !== undefined ? Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100 : 0;
+      insertPayload[m] = v;
+    }
+
+    const { data: inserted, error: insErr } = await supabase
+      .from('fss_income')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insErr) {
+      console.error('Error inserting new income row:', insErr);
+      throw insErr;
+    }
+
+    const { data: allRows } = await supabase.from('fss_income').select('*');
+    const detailRows = (allRows || []).filter(
+      (r: any) => !r.income_name?.toLowerCase().includes('total')
+    );
+    const currentTotalRow = (allRows || []).find(
+      (r: any) => r.income_name?.toLowerCase().includes('total')
+    );
+
+    if (currentTotalRow) {
+      const tPayload: Record<string, any> = {};
+      for (const m of validMonthCols) {
+        const sumM = detailRows.reduce((acc: number, r: any) => acc + (Number(r[m]) || 0), 0);
+        tPayload[m] = Math.round(sumM * 100) / 100;
+      }
+      await supabase
+        .from('fss_income')
+        .update(tPayload)
+        .eq('id', currentTotalRow.id);
+    }
+
+    return inserted;
+  },
+
+  /**
+   * Updates a single cell (month column) for a Financing record in public.fss_financing by id,
+   * recalculates fy_to_date, the total row (Financing Total), and returns the updated dataset.
+   */
+  async updateFinancingCell(
+    idOrName: number | string,
+    monthCol: string,
+    newValue: number | string
+  ): Promise<{ updatedRow: any; totalRow: any; allRows: any[] }> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const validMonthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+    const cleanCol = (monthCol || '').toLowerCase().trim();
+    if (!validMonthCols.includes(cleanCol)) {
+      throw new Error(`Invalid month column: ${monthCol}`);
+    }
+
+    const numVal = Number(newValue);
+    const cleanVal = isNaN(numVal) || numVal < 0 ? 0 : Math.round(numVal * 100) / 100;
+
+    let targetId: number | null = typeof idOrName === 'number' ? idOrName : null;
+    if (!targetId && !isNaN(Number(idOrName))) {
+      targetId = Number(idOrName);
+    }
+
+    let currentRow: any = null;
+    if (targetId) {
+      const { data, error } = await supabase
+        .from('fss_financing')
+        .select('*')
+        .eq('id', targetId)
+        .maybeSingle();
+      if (error) throw error;
+      currentRow = data;
+    } else {
+      const { data, error } = await supabase
+        .from('fss_financing')
+        .select('*')
+        .ilike('financing_name', String(idOrName).trim())
+        .maybeSingle();
+      if (error) throw error;
+      currentRow = data;
+      if (currentRow) targetId = currentRow.id;
+    }
+
+    if (!currentRow) {
+      throw new Error(`Record "${idOrName}" not found in fss_financing.`);
+    }
+
+    const payload: Record<string, any> = {
+      [cleanCol]: cleanVal
+    };
+
+    let newFy = 0;
+    for (const m of validMonthCols) {
+      if (m === cleanCol) newFy += cleanVal;
+      else newFy += Number(currentRow[m] || 0);
+    }
+    payload.fy_to_date = Math.round(newFy * 100) / 100;
+
+    const { data: updated, error: updErr } = await supabase
+      .from('fss_financing')
+      .update(payload)
+      .eq('id', currentRow.id)
+      .select()
+      .single();
+
+    if (updErr) {
+      console.error('Error updating fss_financing record:', updErr);
+      throw updErr;
+    }
+
+    const { data: allRows } = await supabase
+      .from('fss_financing')
+      .select('*')
+      .order('id', { ascending: true });
+
+    const detailRows = (allRows || []).filter(
+      (r: any) => !r.financing_name?.toLowerCase().includes('total') && r.id !== 3
+    );
+    const currentTotalRow = (allRows || []).find(
+      (r: any) => r.financing_name?.toLowerCase().includes('total') || r.id === 3
+    );
+
+    let updatedTotalRow: any = null;
+    if (currentTotalRow) {
+      const tPayload: Record<string, any> = {};
+      let tFy = 0;
+      for (const m of validMonthCols) {
+        const sumM = detailRows.reduce((acc: number, r: any) => acc + (Number(r[m]) || 0), 0);
+        tPayload[m] = Math.round(sumM * 100) / 100;
+        tFy += tPayload[m];
+      }
+      tPayload.fy_to_date = Math.round(tFy * 100) / 100;
+      const { data: tUpdated } = await supabase
+        .from('fss_financing')
+        .update(tPayload)
+        .eq('id', currentTotalRow.id)
+        .select()
+        .single();
+      updatedTotalRow = tUpdated;
+    }
+
+    const { data: freshRows } = await supabase
+      .from('fss_financing')
+      .select('*')
+      .order('id', { ascending: true });
+
+    return {
+      updatedRow: updated,
+      totalRow: updatedTotalRow,
+      allRows: freshRows || []
+    };
+  },
+
+  /**
+   * Adds a new Financing entry to public.fss_financing
+   */
+  async addFinancing(
+    financingName: string,
+    monthlyAmounts: Record<string, number> = {}
+  ): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const trimmed = (financingName || '').trim();
+    if (!trimmed) throw new Error('Financing name is required.');
+
+    const isTotal = trimmed.toLowerCase().includes('total');
+    if (isTotal) {
+      throw new Error('Cannot add a record named "Total" as it is reserved for the subtotal.');
+    }
+
+    const validMonthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+
+    const { data: existing } = await supabase
+      .from('fss_financing')
+      .select('*')
+      .ilike('financing_name', trimmed);
+
+    if (existing && existing.length > 0) {
+      const ex = existing[0];
+      const payload: Record<string, any> = {};
+      let fy = 0;
+      for (const m of validMonthCols) {
+        if (monthlyAmounts[m] !== undefined) {
+          payload[m] = Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100;
+        } else {
+          payload[m] = Number(ex[m] || 0);
+        }
+        fy += payload[m];
+      }
+      payload.fy_to_date = Math.round(fy * 100) / 100;
+
+      const { data: updated, error: updErr } = await supabase
+        .from('fss_financing')
+        .update(payload)
+        .eq('id', ex.id)
+        .select()
+        .single();
+      if (updErr) throw updErr;
+      return updated;
+    }
+
+    const { data: maxIdRow } = await supabase
+      .from('fss_financing')
+      .select('id')
+      .order('id', { ascending: false })
+      .limit(1);
+
+    const nextId = (maxIdRow && maxIdRow[0] && maxIdRow[0].id) ? maxIdRow[0].id + 1 : 1;
+
+    let totalFy = 0;
+    const insertPayload: Record<string, any> = {
+      id: nextId,
+      financing_name: trimmed
+    };
+    for (const m of validMonthCols) {
+      const v = monthlyAmounts[m] !== undefined ? Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100 : 0;
+      insertPayload[m] = v;
+      totalFy += v;
+    }
+    insertPayload.fy_to_date = Math.round(totalFy * 100) / 100;
+
+    const { data: inserted, error: insErr } = await supabase
+      .from('fss_financing')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insErr) {
+      console.error('Error inserting new financing row:', insErr);
+      throw insErr;
+    }
+
+    const { data: allRows } = await supabase.from('fss_financing').select('*');
+    const detailRows = (allRows || []).filter(
+      (r: any) => !r.financing_name?.toLowerCase().includes('total')
+    );
+    const currentTotalRow = (allRows || []).find(
+      (r: any) => r.financing_name?.toLowerCase().includes('total')
+    );
+
+    if (currentTotalRow) {
+      const tPayload: Record<string, any> = {};
+      let tFy = 0;
+      for (const m of validMonthCols) {
+        const sumM = detailRows.reduce((acc: number, r: any) => acc + (Number(r[m]) || 0), 0);
+        tPayload[m] = Math.round(sumM * 100) / 100;
+        tFy += tPayload[m];
+      }
+      tPayload.fy_to_date = Math.round(tFy * 100) / 100;
+      await supabase
+        .from('fss_financing')
+        .update(tPayload)
+        .eq('id', currentTotalRow.id);
+    }
+
+    return inserted;
+  },
+
+  /**
+   * Updates a single cell (month column) for an Operating Receipt record in public.fss_operation_receipts by id,
+   * recalculates fy_to_date, the total row (Operation Receipts), and returns the updated dataset.
+   */
+  async updateOperationReceiptCell(
+    idOrName: number | string,
+    monthCol: string,
+    newValue: number | string
+  ): Promise<{ updatedRow: any; totalRow: any; allRows: any[] }> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const validMonthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+    const cleanCol = (monthCol || '').toLowerCase().trim();
+    if (!validMonthCols.includes(cleanCol)) {
+      throw new Error(`Invalid month column: ${monthCol}`);
+    }
+
+    const numVal = Number(newValue);
+    const cleanVal = isNaN(numVal) || numVal < 0 ? 0 : Math.round(numVal * 100) / 100;
+
+    let targetId: number | null = typeof idOrName === 'number' ? idOrName : null;
+    if (!targetId && !isNaN(Number(idOrName))) {
+      targetId = Number(idOrName);
+    }
+
+    let currentRow: any = null;
+    if (targetId) {
+      const { data, error } = await supabase
+        .from('fss_operation_receipts')
+        .select('*')
+        .eq('id', targetId)
+        .maybeSingle();
+      if (error) throw error;
+      currentRow = data;
+    } else {
+      const { data, error } = await supabase
+        .from('fss_operation_receipts')
+        .select('*')
+        .ilike('receipt_name', String(idOrName).trim())
+        .maybeSingle();
+      if (error) throw error;
+      currentRow = data;
+      if (currentRow) targetId = currentRow.id;
+    }
+
+    if (!currentRow) {
+      throw new Error(`Record "${idOrName}" not found in fss_operation_receipts.`);
+    }
+
+    const payload: Record<string, any> = {
+      [cleanCol]: cleanVal
+    };
+
+    let newFy = 0;
+    for (const m of validMonthCols) {
+      if (m === cleanCol) newFy += cleanVal;
+      else newFy += Number(currentRow[m] || 0);
+    }
+    payload.fy_to_date = Math.round(newFy * 100) / 100;
+
+    const { data: updated, error: updErr } = await supabase
+      .from('fss_operation_receipts')
+      .update(payload)
+      .eq('id', currentRow.id)
+      .select()
+      .single();
+
+    if (updErr) {
+      console.error('Error updating fss_operation_receipts record:', updErr);
+      throw updErr;
+    }
+
+    const { data: allRows } = await supabase
+      .from('fss_operation_receipts')
+      .select('*')
+      .order('id', { ascending: true });
+
+    const detailRows = (allRows || []).filter(
+      (r: any) => !r.receipt_name?.toLowerCase().includes('operation receipts') && r.id !== 5
+    );
+    const currentTotalRow = (allRows || []).find(
+      (r: any) => r.receipt_name?.toLowerCase().includes('operation receipts') || r.id === 5
+    );
+
+    let updatedTotalRow: any = null;
+    if (currentTotalRow) {
+      const tPayload: Record<string, any> = {};
+      let tFy = 0;
+      for (const m of validMonthCols) {
+        const sumM = detailRows.reduce((acc: number, r: any) => acc + (Number(r[m]) || 0), 0);
+        tPayload[m] = Math.round(sumM * 100) / 100;
+        tFy += tPayload[m];
+      }
+      tPayload.fy_to_date = Math.round(tFy * 100) / 100;
+      const { data: tUpdated } = await supabase
+        .from('fss_operation_receipts')
+        .update(tPayload)
+        .eq('id', currentTotalRow.id)
+        .select()
+        .single();
+      updatedTotalRow = tUpdated;
+    }
+
+    const { data: freshRows } = await supabase
+      .from('fss_operation_receipts')
+      .select('*')
+      .order('id', { ascending: true });
+
+    return {
+      updatedRow: updated,
+      totalRow: updatedTotalRow,
+      allRows: freshRows || []
+    };
+  },
+
+  /**
+   * Adds a new Operating Receipt entry to public.fss_operation_receipts
+   */
+  async addOperationReceipt(
+    receiptName: string,
+    monthlyAmounts: Record<string, number> = {}
+  ): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const trimmed = (receiptName || '').trim();
+    if (!trimmed) throw new Error('Receipt name is required.');
+
+    const isTotal = trimmed.toLowerCase().includes('operation receipts') || trimmed.toLowerCase().includes('operating receipts');
+    if (isTotal) {
+      throw new Error('Cannot add a record named "Operation Receipts" as it is reserved for the subtotal.');
+    }
+
+    const validMonthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+
+    const { data: existing } = await supabase
+      .from('fss_operation_receipts')
+      .select('*')
+      .ilike('receipt_name', trimmed);
+
+    if (existing && existing.length > 0) {
+      const ex = existing[0];
+      const payload: Record<string, any> = {};
+      let fy = 0;
+      for (const m of validMonthCols) {
+        if (monthlyAmounts[m] !== undefined) {
+          payload[m] = Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100;
+        } else {
+          payload[m] = Number(ex[m] || 0);
+        }
+        fy += payload[m];
+      }
+      payload.fy_to_date = Math.round(fy * 100) / 100;
+
+      const { data: updated, error: updErr } = await supabase
+        .from('fss_operation_receipts')
+        .update(payload)
+        .eq('id', ex.id)
+        .select()
+        .single();
+      if (updErr) throw updErr;
+      return updated;
+    }
+
+    const { data: maxIdRow } = await supabase
+      .from('fss_operation_receipts')
+      .select('id')
+      .order('id', { ascending: false })
+      .limit(1);
+
+    const nextId = (maxIdRow && maxIdRow[0] && maxIdRow[0].id) ? maxIdRow[0].id + 1 : 1;
+
+    let totalFy = 0;
+    const insertPayload: Record<string, any> = {
+      id: nextId,
+      receipt_name: trimmed,
+      last_fy_to_date: 0
+    };
+    for (const m of validMonthCols) {
+      const v = monthlyAmounts[m] !== undefined ? Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100 : 0;
+      insertPayload[m] = v;
+      totalFy += v;
+    }
+    insertPayload.fy_to_date = Math.round(totalFy * 100) / 100;
+
+    const { data: inserted, error: insErr } = await supabase
+      .from('fss_operation_receipts')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insErr) {
+      console.error('Error inserting new operation receipt row:', insErr);
+      throw insErr;
+    }
+
+    const { data: allRows } = await supabase.from('fss_operation_receipts').select('*');
+    const detailRows = (allRows || []).filter(
+      (r: any) => !r.receipt_name?.toLowerCase().includes('operation receipts')
+    );
+    const currentTotalRow = (allRows || []).find(
+      (r: any) => r.receipt_name?.toLowerCase().includes('operation receipts')
+    );
+
+    if (currentTotalRow) {
+      const tPayload: Record<string, any> = {};
+      let tFy = 0;
+      for (const m of validMonthCols) {
+        const sumM = detailRows.reduce((acc: number, r: any) => acc + (Number(r[m]) || 0), 0);
+        tPayload[m] = Math.round(sumM * 100) / 100;
+        tFy += tPayload[m];
+      }
+      tPayload.fy_to_date = Math.round(tFy * 100) / 100;
+      await supabase
+        .from('fss_operation_receipts')
+        .update(tPayload)
+        .eq('id', currentTotalRow.id);
+    }
+
+    return inserted;
+  },
+
+  /**
+   * Syncs / inserts Cashflow Inflow data into fss_operation_receipts, fss_income, and fss_financing in Supabase,
+   * then fetches the fresh fss_cash_inflow view.
+   */
+  async syncCashflowInflowToSupabase(
+    dataPayloads: {
+      operationReceipts?: any[];
+      income?: any[];
+      financing?: any[];
+    }
+  ): Promise<{
+    operationReceipts: any[];
+    income: any[];
+    financing: any[];
+    cashInflow: any[];
+  }> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+
+    const syncedOpRecs: any[] = [];
+    if (dataPayloads.operationReceipts && dataPayloads.operationReceipts.length > 0) {
+      for (const row of dataPayloads.operationReceipts) {
+        const payload = { ...row };
+        delete payload.created_at;
+        let syncedRow = null;
+        if (payload.id) {
+          const { data: updated, error: updErr } = await supabase
+            .from('fss_operation_receipts')
+            .update(payload)
+            .eq('id', payload.id)
+            .select();
+          if (!updErr && updated && updated.length > 0) {
+            syncedRow = updated[0];
+          }
+        }
+        if (!syncedRow) {
+          const { data: inserted, error: insErr } = await supabase
+            .from('fss_operation_receipts')
+            .insert(payload)
+            .select();
+          if (!insErr && inserted && inserted.length > 0) {
+            syncedRow = inserted[0];
+          } else if (insErr) {
+            console.error(`Error saving operation receipt (${row.receipt_name}):`, insErr);
+          }
+        }
+        if (syncedRow) syncedOpRecs.push(syncedRow);
+      }
+    }
+
+    const syncedIncome: any[] = [];
+    if (dataPayloads.income && dataPayloads.income.length > 0) {
+      for (const row of dataPayloads.income) {
+        const payload = { ...row };
+        delete payload.created_at;
+        delete payload.fy_to_date;
+        let syncedRow = null;
+        if (payload.id) {
+          const { data: updated, error: updErr } = await supabase
+            .from('fss_income')
+            .update(payload)
+            .eq('id', payload.id)
+            .select();
+          if (!updErr && updated && updated.length > 0) {
+            syncedRow = updated[0];
+          }
+        }
+        if (!syncedRow) {
+          const { data: inserted, error: insErr } = await supabase
+            .from('fss_income')
+            .insert(payload)
+            .select();
+          if (!insErr && inserted && inserted.length > 0) {
+            syncedRow = inserted[0];
+          } else if (insErr) {
+            console.error(`Error saving income (${row.income_name}):`, insErr);
+          }
+        }
+        if (syncedRow) syncedIncome.push(syncedRow);
+      }
+    }
+
+    const syncedFinancing: any[] = [];
+    if (dataPayloads.financing && dataPayloads.financing.length > 0) {
+      for (const row of dataPayloads.financing) {
+        const payload = { ...row };
+        delete payload.created_at;
+        let syncedRow = null;
+        if (payload.id) {
+          const { data: updated, error: updErr } = await supabase
+            .from('fss_financing')
+            .update(payload)
+            .eq('id', payload.id)
+            .select();
+          if (!updErr && updated && updated.length > 0) {
+            syncedRow = updated[0];
+          }
+        }
+        if (!syncedRow) {
+          const { data: inserted, error: insErr } = await supabase
+            .from('fss_financing')
+            .insert(payload)
+            .select();
+          if (!insErr && inserted && inserted.length > 0) {
+            syncedRow = inserted[0];
+          } else if (insErr) {
+            console.error(`Error saving financing (${row.financing_name}):`, insErr);
+          }
+        }
+        if (syncedRow) syncedFinancing.push(syncedRow);
+      }
+    }
+
+    try {
+      const { data: cfView } = await supabase.from('fss_cash_inflow').select('*');
+      return {
+        operationReceipts: syncedOpRecs.length ? syncedOpRecs : await this.loadOperationReceiptsFromSupabase(),
+        income: syncedIncome.length ? syncedIncome : await this.loadIncomeFromSupabase(),
+        financing: syncedFinancing.length ? syncedFinancing : await this.loadFinancingFromSupabase(),
+        cashInflow: cfView || []
+      };
+    } catch {
+      return {
+        operationReceipts: syncedOpRecs,
+        income: syncedIncome,
+        financing: syncedFinancing,
+        cashInflow: await this.loadCashInflowFromSupabase()
+      };
+    }
+  },
+
+  /**
+   * Loads all rows from public.fss_outflow_oc_people
+   */
+  async loadPeopleFromSupabase(): Promise<any[]> {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase
+        .from('fss_outflow_oc_people')
+        .select('*')
+        .order('id', { ascending: true });
+      if (error) {
+        console.error('Error loading fss_outflow_oc_people from Supabase:', error);
+        return [];
+      }
+      return data || [];
+    } catch (err) {
+      console.error('Exception loading fss_outflow_oc_people from Supabase:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Loads all rows from public.fss_outflow_oc_people_report (SQL View)
+   */
+  async loadPeopleReportFromSupabase(): Promise<any[]> {
+    if (!supabase) return [];
+    try {
+      const { data, error } = await supabase
+        .from('fss_outflow_oc_people_report')
+        .select('*');
+      if (error) {
+        console.error('Error loading fss_outflow_oc_people_report from Supabase:', error);
+        return [];
+      }
+      return data || [];
+    } catch (err) {
+      console.error('Exception loading fss_outflow_oc_people_report from Supabase:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Updates a single cell (month column) for an Operating Costs - People record in public.fss_outflow_oc_people by id.
+   * Note: The view fss_outflow_oc_people_report automatically recalculates fy_to_date, share_pct, and People Total.
+   */
+  async updatePeopleCell(
+    idOrCategory: number | string,
+    monthCol: string,
+    newValue: number | string
+  ): Promise<{ updatedRow: any; allRows: any[]; reportRows: any[] }> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const validMonthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+    const cleanCol = (monthCol || '').toLowerCase().trim();
+    if (!validMonthCols.includes(cleanCol)) {
+      throw new Error(`Invalid month column: ${monthCol}`);
+    }
+
+    const numVal = Number(newValue);
+    const cleanVal = isNaN(numVal) || numVal < 0 ? 0 : Math.round(numVal * 100) / 100;
+
+    let targetId: number | null = typeof idOrCategory === 'number' ? idOrCategory : null;
+    if (!targetId && !isNaN(Number(idOrCategory))) {
+      targetId = Number(idOrCategory);
+    }
+
+    let currentRow: any = null;
+    if (targetId) {
+      const { data, error } = await supabase
+        .from('fss_outflow_oc_people')
+        .select('*')
+        .eq('id', targetId)
+        .maybeSingle();
+      if (error) throw error;
+      currentRow = data;
+    } else {
+      const { data, error } = await supabase
+        .from('fss_outflow_oc_people')
+        .select('*')
+        .ilike('category', String(idOrCategory).trim())
+        .maybeSingle();
+      if (error) throw error;
+      currentRow = data;
+      if (currentRow) targetId = currentRow.id;
+    }
+
+    if (!currentRow) {
+      throw new Error(`Record "${idOrCategory}" not found in fss_outflow_oc_people.`);
+    }
+
+    const payload: Record<string, any> = {
+      [cleanCol]: cleanVal
+    };
+
+    const { data: updated, error: updErr } = await supabase
+      .from('fss_outflow_oc_people')
+      .update(payload)
+      .eq('id', currentRow.id)
+      .select()
+      .single();
+
+    if (updErr) {
+      console.error('Error updating fss_outflow_oc_people record:', updErr);
+      throw updErr;
+    }
+
+    const [allRows, reportRows] = await Promise.all([
+      this.loadPeopleFromSupabase(),
+      this.loadPeopleReportFromSupabase()
+    ]);
+
+    return {
+      updatedRow: updated,
+      allRows,
+      reportRows
+    };
+  },
+
+  /**
+   * Adds a new Operating Costs - People expense into public.fss_outflow_oc_people,
+   * avoiding duplicate inserts.
+   */
+  async addPeopleExpense(
+    categoryName: string,
+    monthlyAmounts: Record<string, number> = {}
+  ): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const trimmed = (categoryName || '').trim();
+    if (!trimmed) throw new Error('Category name is required.');
+
+    const isTotal = trimmed.toLowerCase().includes('total');
+    if (isTotal) {
+      throw new Error('Cannot add a record named "Total" as it is reserved for the subtotal.');
+    }
+
+    const validMonthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+
+    const { data: existing } = await supabase
+      .from('fss_outflow_oc_people')
+      .select('*')
+      .ilike('category', trimmed);
+
+    if (existing && existing.length > 0) {
+      const ex = existing[0];
+      const payload: Record<string, any> = {};
+      for (const m of validMonthCols) {
+        if (monthlyAmounts[m] !== undefined) {
+          payload[m] = Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100;
+        } else {
+          payload[m] = Number(ex[m] || 0);
+        }
+      }
+
+      const { data: updated, error: updErr } = await supabase
+        .from('fss_outflow_oc_people')
+        .update(payload)
+        .eq('id', ex.id)
+        .select()
+        .single();
+      if (updErr) throw updErr;
+      return updated;
+    }
+
+    const insertPayload: Record<string, any> = {
+      category: trimmed
+    };
+    for (const m of validMonthCols) {
+      const v = monthlyAmounts[m] !== undefined ? Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100 : 0;
+      insertPayload[m] = v;
+    }
+
+    const { data: inserted, error: insErr } = await supabase
+      .from('fss_outflow_oc_people')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insErr) {
+      console.error('Error inserting new people row:', insErr);
+      throw insErr;
+    }
+
+    return inserted;
+  },
+
+  /**
+   * Syncs / inserts People outflow rows to public.fss_outflow_oc_people
+   */
+  async syncPeopleToSupabase(peopleRows: any[]): Promise<{
+    people: any[];
+    peopleReport: any[];
+  }> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+
+    for (const row of peopleRows) {
+      const payload = { ...row };
+      delete payload.created_at;
+      delete payload.fy_to_date;
+      delete payload.share_pct;
+
+      if (payload.id) {
+        const { error: updErr } = await supabase
+          .from('fss_outflow_oc_people')
+          .update(payload)
+          .eq('id', payload.id);
+        if (updErr) {
+          await supabase.from('fss_outflow_oc_people').insert(payload);
+        }
+      } else {
+        await supabase.from('fss_outflow_oc_people').insert(payload);
+      }
+    }
+
+    const [people, peopleReport] = await Promise.all([
+      this.loadPeopleFromSupabase(),
+      this.loadPeopleReportFromSupabase()
+    ]);
+    return { people, peopleReport };
   }
 };
 
@@ -2627,6 +3772,3 @@ export function getFinancialYear(dateStr: string): string {
   const endYearShort = String((startYear + 1) % 100).padStart(2, '0');
   return `${startYear}-${endYearShort}`;
 }
-
-
-
