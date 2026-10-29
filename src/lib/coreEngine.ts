@@ -121,7 +121,7 @@ function money(n, opts = {}) {
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = (p = 'id') => p + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const sum = (arr, f = x => x) => arr.reduce((s, x) => s + (+f(x) || 0), 0);
-const Hooks = { notify: () => {} };
+const Hooks = { notify: () => { } };
 
 /* ----------------------------- constants ----------------------------- */
 const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'Cheque', 'Cash', 'Card', 'Auto-debit', 'SWIFT'];
@@ -349,8 +349,8 @@ const Store = {
   },
   persist() {
     if (!STORAGE_OK) return;
-    try { 
-      localStorage.setItem(DB_KEY, JSON.stringify(this.data)); 
+    try {
+      localStorage.setItem(DB_KEY, JSON.stringify(this.data));
       if (typeof window !== 'undefined' && window.__onCashflowDataChanged) {
         window.__onCashflowDataChanged(this.data);
       }
@@ -490,7 +490,7 @@ const api = {
     } else {
       if (!e.categoryId) errs.categoryId = 'Choose a category';
       if (!e.departmentId) errs.departmentId = 'Choose a department';
-      if (!e.partyId && !e.projectId) errs.partyId = 'Link a client, vendor, employee or project';
+      if (!e.partyId && !e.projectId && !['cat_sal', 'cat_ceo', 'cat_welfare', 'cat_bonus'].includes(e.categoryId) && !String(e.categoryId || '').startsWith('oc_ppl_')) errs.partyId = 'Link a client, vendor, employee or project';
       if (!(+e.taxable > 0)) errs.taxable = 'Enter an amount greater than zero';
       else if (+e.tdsAmount < 0 || +e.gstAmount < 0) errs.taxable = 'GST and TDS cannot be negative';
       else if (entryNet(e) <= 0) errs.taxable = 'Net cash must be greater than zero';
@@ -565,7 +565,7 @@ const api = {
   async purge(id) {
     api.guard('entry.purge');
     const e = api.get('entries', id);
-    for (const a of e.attachments || []) await FileStore.del(a.id).catch(() => {});
+    for (const a of e.attachments || []) await FileStore.del(a.id).catch(() => { });
     Store.data.entries = Store.data.entries.filter(x => x.id !== id);
     api.log('purge', 'entries', id, describe('entries', e)); Store.persist();
     if (typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteTransaction === 'function') {
@@ -827,9 +827,11 @@ function recurringSuggest(r) {
 /** Build an entry from a recurring template for a given cycle (used by quick-record and the confirm form). */
 function entryFromRecurring(rec, period, dueDate, taxable) {
   const t = taxable != null ? +taxable : recurringSuggest(rec).suggested;
-  const v = { type: rec.type, date: dueDate <= TODAY ? dueDate : TODAY, categoryId: rec.categoryId, departmentId: rec.departmentId, partyId: rec.partyId, projectId: rec.projectId || null,
+  const v = {
+    type: rec.type, date: dueDate <= TODAY ? dueDate : TODAY, categoryId: rec.categoryId, departmentId: rec.departmentId, partyId: rec.partyId, projectId: rec.projectId || null,
     description: rec.description, refNo: '', taxable: t, gstType: rec.gstType, gstRate: rec.gstRate, gstAmount: r2(t * rec.gstRate / 100), itc: rec.itc !== false, tdsRate: rec.tdsRate, tdsAmount: r2(t * rec.tdsRate / 100),
-    paymentMode: rec.paymentMode, accountId: rec.accountId, toAccountId: null, txnRef: '', notes: '', attachments: [], recurringId: rec.id, recurringPeriod: period, piId: null };
+    paymentMode: rec.paymentMode, accountId: rec.accountId, toAccountId: null, txnRef: '', notes: '', attachments: [], recurringId: rec.id, recurringPeriod: period, piId: null
+  };
   if (rec.categoryId === 'cat_sal' || rec.categoryId === 'cat_ceo') v.description = 'Salary – ' + monthLabel(period, true);
   if (rec.type === 'inflow') { const pi = api.list('pis').find(p => p.clientId === rec.partyId && ymOf(p.date) === period && Sales.piState(p).outstanding > 0); if (pi) { v.piId = pi.id; v.refNo = pi.taxInvoiceNo || pi.piNo; } }
   return v;
@@ -949,10 +951,14 @@ function buildSeed() {
   D.parties.filter(p => p.kind === 'client').forEach(p => { const x = CL_INFO[p.id]; const gi = gstinInfo(p.gstin) || {}; Object.assign(p, { tan: CL_TAN[p.id] || '', stateCode: gi.stateCode || '', pan: gi.pan || '', address: x ? x[0] : '', pincode: x ? x[1] : '', creditDays: x ? x[2] : 30, bank: null, contacts: x ? x[3].map((c, i) => mkC(dom(p.name), c, i)) : [] }); });
   const BANKS = [['HDFC Bank', 'HDFC0000', 50100], ['ICICI Bank', 'ICIC0000', 6205], ['Kotak Mahindra Bank', 'KKBK0000', 4611], ['State Bank of India', 'SBIN0000', 3987], ['Axis Bank', 'UTIB0000', 9170]];
   const VN_PEOPLE = { vn_landlord: ['Mahesh Agarwal', 'Partner'], vn_net: ['Support desk', ''], vn_soft: ['Billing team', ''], vn_clean: ['Ramesh Yadav', 'Supervisor'], vn_proto: ['Ravi Shetty', 'Owner'], vn_cnc: ['Imran Khan', 'Production Head'], vn_lab: ['Dr. Anjali Mehta', 'Lab Manager'] };
-  D.parties.filter(p => p.kind === 'vendor').forEach((p, i) => { const gi = gstinInfo(p.gstin) || {}; const bk = BANKS[i % BANKS.length]; const em = splitEmails(p.email)[0] || ''; const who = VN_PEOPLE[p.id];
-    Object.assign(p, { stateCode: gi.stateCode || (p.gstType === 'inter' ? '29' : '27'), pan: gi.pan || '', address: p.gstType === 'inter' ? 'Bengaluru' : 'Mumbai', pincode: '', creditDays: [0, 15, 30][i % 3],
+  D.parties.filter(p => p.kind === 'vendor').forEach((p, i) => {
+    const gi = gstinInfo(p.gstin) || {}; const bk = BANKS[i % BANKS.length]; const em = splitEmails(p.email)[0] || ''; const who = VN_PEOPLE[p.id];
+    Object.assign(p, {
+      stateCode: gi.stateCode || (p.gstType === 'inter' ? '29' : '27'), pan: gi.pan || '', address: p.gstType === 'inter' ? 'Bengaluru' : 'Mumbai', pincode: '', creditDays: [0, 15, 30][i % 3],
       bank: p.id === 'vn_power' ? null : { accName: p.name, bankName: bk[0], accNo: String(bk[2]) + String(100000 + i * 7919).slice(-6) + '42' + i, ifsc: bk[1].slice(0, 4) + '0' + String(100000 + i * 317).slice(-6), upi: ['vn_proto', 'vn_clean', 'vn_cnc'].includes(p.id) ? dom(p.name) + '@okhdfcbank' : '' },
-      contacts: em ? [{ id: 'ct0', name: who ? who[0] : 'Accounts', designation: who ? who[1] : '', email: em, phone: '98' + String(20000000 + i * 1234567).slice(0, 8), whatsapp: true, tags: ['accounts'] }] : [] }); });
+      contacts: em ? [{ id: 'ct0', name: who ? who[0] : 'Accounts', designation: who ? who[1] : '', email: em, phone: '98' + String(20000000 + i * 1234567).slice(0, 8), whatsapp: true, tags: ['accounts'] }] : []
+    });
+  });
   D.parties.filter(p => p.kind === 'client' || p.kind === 'vendor').forEach(p => { p.email = partyEmails(p).join(', '); p.phone = (partyContacts(p).find(c => c.phone) || {}).phone || ''; });
   [['ot_gst', 'GST Department (Govt.)'], ['ot_it', 'Income Tax Department'], ['ot_pt', 'Maharashtra Profession Tax'], ['ot_hdfc', 'HDFC Bank'], ['ot_owner', 'Owner – Capital Account']].forEach(([id, n]) => P(id, 'other', n));
   const EMP = [
@@ -1012,16 +1018,20 @@ function buildSeed() {
   const SPLIT = { pr_2505: [['dep_design', 70], ['dep_eng', 30]], pr_2508: [['dep_eng', 60], ['dep_design', 40]], pr_2602: [['dep_design', 80], ['dep_eng', 20]], pr_2607: [['dep_eng', 70], ['dep_design', 30]] };
   const O = o => {
     const pc = party(o.clientId); const gstType = pc.gstType === 'none' ? 'intra' : pc.gstType;
-    const rec = { id: o.id, orderNo: o.orderNo, type: o.type || 'PO', date: o.date, clientId: o.clientId, projectId: o.projectId, departmentId: o.departmentId,
+    const rec = {
+      id: o.id, orderNo: o.orderNo, type: o.type || 'PO', date: o.date, clientId: o.clientId, projectId: o.projectId, departmentId: o.departmentId,
       split: (SPLIT[o.projectId] || []).map(([d, pc2]) => ({ departmentId: d, pct: pc2 })), scope: o.scope || '', taxable: o.taxable, gstRate: 18, gstType, gstAmount: Math.round(o.taxable * 0.18), total: 0,
       terms: o.terms, expectedCompletion: o.expectedCompletion || null, contact: o.contact || '', notes: o.notes || '', attachments: [], status: o.status || 'active', amendments: o.amendments || [],
-      createdBy: o.createdBy || 'u_acct', createdAt: o.date + 'T06:30:00.000Z', deleted: false };
+      createdBy: o.createdBy || 'u_acct', createdAt: o.date + 'T06:30:00.000Z', deleted: false
+    };
     rec.total = rec.taxable + rec.gstAmount; D.orders.push(rec); return rec;
   };
   const PI = p => {
     const o = D.orders.find(x => x.id === p.orderId);
-    const rec = { id: p.id, piNo: '', date: p.date, dueDate: p.dueDate || addDays(p.date, 30), orderId: o.id, clientId: o.clientId, projectId: o.projectId, milestone: p.milestone, taxable: p.taxable, gstRate: 18, gstType: o.gstType,
-      gstAmount: Math.round(p.taxable * 0.18), tdsRate: 10, tdsAmount: Math.round(p.taxable * 0.1), total: 0, taxInvoiceNo: '', status: 'issued', notes: '', attachments: [], createdBy: 'u_acct', createdAt: p.date + 'T07:15:00.000Z', deleted: false };
+    const rec = {
+      id: p.id, piNo: '', date: p.date, dueDate: p.dueDate || addDays(p.date, 30), orderId: o.id, clientId: o.clientId, projectId: o.projectId, milestone: p.milestone, taxable: p.taxable, gstRate: 18, gstType: o.gstType,
+      gstAmount: Math.round(p.taxable * 0.18), tdsRate: 10, tdsAmount: Math.round(p.taxable * 0.1), total: 0, taxInvoiceNo: '', status: 'issued', notes: '', attachments: [], createdBy: 'u_acct', createdAt: p.date + 'T07:15:00.000Z', deleted: false
+    };
     rec.total = rec.taxable + rec.gstAmount; D.pis.push(rec); return rec;
   };
   const contacts = { cl_nw: 'R. Kapoor (Purchase)', cl_vl: 'S. Patel (R&D)', cl_ar: 'M. Rao (Sourcing)', cl_md: 'A. Kulkarni (Engineering)', cl_sl: 'N. Gupta (Product)', cl_ks: 'V. Iyer (Programs)', cl_zp: 'K. Raman (Design)' };
@@ -1098,17 +1108,21 @@ function buildSeed() {
   /* project milestone receipts */
   let invNo = { 2025: 40, 2026: 30 };
   for (const [id, code, name, cl, dep, fee, ms] of PRJ) {
-    const ord = O({ id: 'or_' + id.slice(3), orderNo: '4500' + rint(100000, 999999), date: addDays(ms[0][0], -21), clientId: cl, projectId: id, departmentId: dep, taxable: fee,
+    const ord = O({
+      id: 'or_' + id.slice(3), orderNo: '4500' + rint(100000, 999999), date: addDays(ms[0][0], -21), clientId: cl, projectId: id, departmentId: dep, taxable: fee,
       scope: name + ' – concept to production-ready design', terms: ms.map(([, pc], i) => ({ label: ['Concept sign-off', 'Detailed design', 'Production release'][i] || 'Milestone ' + (i + 1), pct: pc })),
-      expectedCompletion: addDays(ms[ms.length - 1][0], 10), contact: contacts[cl], status: ms[ms.length - 1][0] < addDays(TODAY, -60) ? 'closed' : 'active' });
+      expectedCompletion: addDays(ms[ms.length - 1][0], 10), contact: contacts[cl], status: ms[ms.length - 1][0] < addDays(TODAY, -60) ? 'closed' : 'active'
+    });
     ms.forEach(([date, pct], i) => {
       const fy = fyOf(date); invNo[fy] = (invNo[fy] || 0) + 1;
       const piDate = addDays(date, -rint(14, 26));
       const pi = piDate < TODAY ? PI({ id: 'pi_' + id.slice(3) + '_' + i, orderId: ord.id, date: piDate, milestone: ord.terms[i].label + ` (${pct}%)`, taxable: Math.round(fee * pct / 100) }) : null;
       if (pi && date < TODAY) pi.taxInvoiceNo = `TI/${fy % 100}-${(fy + 1) % 100}/${String(invNo[fy]).padStart(3, '0')}`;
-      add({ piId: pi ? pi.id : null, type: 'inflow', date, categoryId: id === 'pr_2604' ? 'cat_consult' : (dep === 'dep_eng' ? 'cat_reng' : 'cat_rdesign'), departmentId: dep, partyId: cl, projectId: id,
+      add({
+        piId: pi ? pi.id : null, type: 'inflow', date, categoryId: id === 'pr_2604' ? 'cat_consult' : (dep === 'dep_eng' ? 'cat_reng' : 'cat_rdesign'), departmentId: dep, partyId: cl, projectId: id,
         description: `${code} milestone ${i + 1} of ${ms.length} (${pct}%)`, refNo: `INV/${fy % 100}-${(fy + 1) % 100}/${pad2(invNo[fy]).padStart(3, '0')}`,
-        taxable: Math.round(fee * pct / 100), gstRate: 18, tdsRate: 10, paymentMode: pick(['NEFT', 'RTGS']), accountId: ['cl_ar', 'cl_zp', 'cl_ks'].includes(cl) ? 'acc_icici' : 'acc_hdfc' });
+        taxable: Math.round(fee * pct / 100), gstRate: 18, tdsRate: 10, paymentMode: pick(['NEFT', 'RTGS']), accountId: ['cl_ar', 'cl_zp', 'cl_ks'].includes(cl) ? 'acc_icici' : 'acc_hdfc'
+      });
     });
     // direct project costs
     const start = addDays(ms[0][0], -14), end = ms[ms.length - 1][0], span = Math.max(20, diffDays(end, start));
@@ -1145,13 +1159,17 @@ function buildSeed() {
 
   /* consulting one-offs: email-confirmed orders */
   [['pr_25c1', 'cl_zp', 'dep_design', 250000, '2025-08-25', '2025-09-02'], ['pr_25c2', 'cl_md', 'dep_eng', 180000, '2026-01-12', '2026-01-20'], ['pr_26c1', 'cl_sl', 'dep_design', 220000, '2026-07-10', '2026-07-18']]
-    .forEach(([pid, cl, dep, v, od, pd]) => { const o = O({ id: 'or_' + pid.slice(3), orderNo: 'EMAIL ' + fmtDate(od), type: 'Email', date: od, clientId: cl, projectId: pid, departmentId: dep, taxable: v, scope: D.projects.find(x => x.id === pid).name, terms: [{ label: '100% on completion', pct: 100 }], contact: contacts[cl], status: 'closed' });
-      PI({ id: 'pi_' + pid.slice(3), orderId: o.id, date: pd, dueDate: addDays(pd, 21), milestone: '100% on completion', taxable: v }); });
+    .forEach(([pid, cl, dep, v, od, pd]) => {
+      const o = O({ id: 'or_' + pid.slice(3), orderNo: 'EMAIL ' + fmtDate(od), type: 'Email', date: od, clientId: cl, projectId: pid, departmentId: dep, taxable: v, scope: D.projects.find(x => x.id === pid).name, terms: [{ label: '100% on completion', pct: 100 }], contact: contacts[cl], status: 'closed' });
+      PI({ id: 'pi_' + pid.slice(3), orderId: o.id, date: pd, dueDate: addDays(pd, 21), milestone: '100% on completion', taxable: v });
+    });
   /* retainer contracts — one order per contract year, a PI on the 1st of every month */
-  const retOrders = { cl_nw: [O({ id: 'or_ret_nw_25', orderNo: 'NW/RET/2025-26', type: 'Contract', date: '2025-03-20', clientId: 'cl_nw', projectId: 'pr_ret_nw', departmentId: 'dep_design', taxable: 1800000, scope: 'Design support retainer, Apr 2025 – Mar 2026', terms: [{ label: 'Monthly in advance × 12', pct: 100 }], contact: contacts.cl_nw, status: 'closed' }),
-                                O({ id: 'or_ret_nw_26', orderNo: 'NW/RET/2026-27', type: 'Contract', date: '2026-03-18', clientId: 'cl_nw', projectId: 'pr_ret_nw', departmentId: 'dep_design', taxable: 1800000, scope: 'Design support retainer, Apr 2026 – Mar 2027', terms: [{ label: 'Monthly in advance × 12', pct: 100 }], contact: contacts.cl_nw })],
-                    cl_vl: [O({ id: 'or_ret_vl_25', orderNo: 'VEL-SA-0925', type: 'Contract', date: '2025-09-20', clientId: 'cl_vl', projectId: 'pr_ret_vl', departmentId: 'dep_eng', taxable: 1440000, scope: 'Engineering support, Oct 2025 – Sep 2026', terms: [{ label: 'Monthly × 12', pct: 100 }], contact: contacts.cl_vl, status: 'closed' }),
-                            O({ id: 'or_ret_vl_26', orderNo: 'VEL-SA-1026', type: 'Contract', date: '2026-09-24', clientId: 'cl_vl', projectId: 'pr_ret_vl', departmentId: 'dep_eng', taxable: 1440000, scope: 'Engineering support renewal, Oct 2026 – Sep 2027', terms: [{ label: 'Monthly × 12', pct: 100 }], contact: contacts.cl_vl })] };
+  const retOrders = {
+    cl_nw: [O({ id: 'or_ret_nw_25', orderNo: 'NW/RET/2025-26', type: 'Contract', date: '2025-03-20', clientId: 'cl_nw', projectId: 'pr_ret_nw', departmentId: 'dep_design', taxable: 1800000, scope: 'Design support retainer, Apr 2025 – Mar 2026', terms: [{ label: 'Monthly in advance × 12', pct: 100 }], contact: contacts.cl_nw, status: 'closed' }),
+    O({ id: 'or_ret_nw_26', orderNo: 'NW/RET/2026-27', type: 'Contract', date: '2026-03-18', clientId: 'cl_nw', projectId: 'pr_ret_nw', departmentId: 'dep_design', taxable: 1800000, scope: 'Design support retainer, Apr 2026 – Mar 2027', terms: [{ label: 'Monthly in advance × 12', pct: 100 }], contact: contacts.cl_nw })],
+    cl_vl: [O({ id: 'or_ret_vl_25', orderNo: 'VEL-SA-0925', type: 'Contract', date: '2025-09-20', clientId: 'cl_vl', projectId: 'pr_ret_vl', departmentId: 'dep_eng', taxable: 1440000, scope: 'Engineering support, Oct 2025 – Sep 2026', terms: [{ label: 'Monthly × 12', pct: 100 }], contact: contacts.cl_vl, status: 'closed' }),
+    O({ id: 'or_ret_vl_26', orderNo: 'VEL-SA-1026', type: 'Contract', date: '2026-09-24', clientId: 'cl_vl', projectId: 'pr_ret_vl', departmentId: 'dep_eng', taxable: 1440000, scope: 'Engineering support renewal, Oct 2026 – Sep 2027', terms: [{ label: 'Monthly × 12', pct: 100 }], contact: contacts.cl_vl })]
+  };
   for (const r of D.recurring.filter(x => x.id === 'rc_ret_nw' || x.id === 'rc_ret_vl')) {
     for (const per of recurringPeriods(r, addDays(TODAY, 40))) {
       const d1 = per.period + '-01'; if (d1 > TODAY) continue;
@@ -1262,8 +1280,10 @@ function buildSeed() {
   const ES = D.settings.email; const recentE = D.entries.filter(e => !e.deleted && e.date >= addDays(TODAY, -45)).map(e => ({ e, k: entryEmailKind(e) })).filter(x => x.k && partyEmails(party(x.e.partyId)).length);
   recentE.forEach(({ e, k }, i) => {
     const vars = entryEmailVars(e), t = ES.templates[k]; const ts = e.createdAt; const st = e.date >= addDays(TODAY, -3) ? 'queued' : i === 3 ? 'failed' : 'sent';
-    const m = { id: 'em_' + e.id, kind: k, entity: 'entries', entityId: e.id, partyId: e.partyId, from: ES.from, to: partyEmails(party(e.partyId)).slice(0, 1), cc: [], subject: fillTemplate(t.subject, vars), body: fillTemplate(t.body, vars), attachments: [], status: st,
-      sentAt: st === 'sent' ? addDays(ts.slice(0, 10), 0) + 'T' + ts.slice(11, 16) + ':30.000Z' : null, error: st === 'failed' ? '550 Mailbox unavailable (test data)' : null, events: [{ ts, status: 'queued', by: e.createdBy }], createdBy: e.createdBy, createdAt: ts, deleted: false };
+    const m = {
+      id: 'em_' + e.id, kind: k, entity: 'entries', entityId: e.id, partyId: e.partyId, from: ES.from, to: partyEmails(party(e.partyId)).slice(0, 1), cc: [], subject: fillTemplate(t.subject, vars), body: fillTemplate(t.body, vars), attachments: [], status: st,
+      sentAt: st === 'sent' ? addDays(ts.slice(0, 10), 0) + 'T' + ts.slice(11, 16) + ':30.000Z' : null, error: st === 'failed' ? '550 Mailbox unavailable (test data)' : null, events: [{ ts, status: 'queued', by: e.createdBy }], createdBy: e.createdBy, createdAt: ts, deleted: false
+    };
     if (st !== 'queued') m.events.push({ ts: ts.slice(0, 17) + '45.000Z', status: st, by: 'system', note: st === 'failed' ? m.error : 'Delivered by mail server (test data)' });
     D.emails.push(m); A(ts, e.createdBy, 'create', 'emails', m.id, describe('emails', m));
   });
@@ -1276,7 +1296,7 @@ function buildSeed() {
   {
     const C = D.compliance, mark = (k, at, ref) => { C[k] = { done: true, at: at + 'T11:00:00.000Z', by: 'u_acct', ref }; };
     for (let ym = '2025-04'; ym < '2026-09'; ym = addMonths(ym, 1)) { const nx = addMonths(ym, 1); mark('gstr1:' + ym, ymDate(nx, 10), 'ARN-G1-' + ym.replace('-', '')); mark('gstr3b:' + ym, ymDate(nx, 19), 'ARN-3B-' + ym.replace('-', '')); }
-    [[2025, 0], [2025, 1], [2025, 2], [2025, 3], [2026, 0]].forEach(([fy, q]) => { const due = ['07-31', '10-31', '01-31', '05-31'][q], y = q === 3 ? fy + 1 : q === 2 ? fy + 1 : fy; ['24Q', '26Q'].forEach(f => mark('tdsret' + f + ':' + fy + 'Q' + (q + 1), y + '-' + due.replace(/31$/, '28'), 'PRN-' + f + '-' + fy + q)); mark('f16a:' + fy + 'Q' + (q + 1), (q === 3 ? fy + 1 : q === 2 ? fy + 1 : fy) + '-' + ['08-12', '11-12', '02-12', '06-12'][q], ''); });
+    [[2025, 0], [2025, 1], [2025, 2], [2025, 3], [2026, 0]].forEach(([fy, q]) => { const due = ['07-31', '10-31', '01-31', '05-31'][q], y = q === 3 ? fy + 1 : q === 2 ? fy + 1 : fy;['24Q', '26Q'].forEach(f => mark('tdsret' + f + ':' + fy + 'Q' + (q + 1), y + '-' + due.replace(/31$/, '28'), 'PRN-' + f + '-' + fy + q)); mark('f16a:' + fy + 'Q' + (q + 1), (q === 3 ? fy + 1 : q === 2 ? fy + 1 : fy) + '-' + ['08-12', '11-12', '02-12', '06-12'][q], ''); });
     mark('gstr9:2024', '2025-12-20', 'ARN-G9-2425'); mark('itr:2024', '2025-10-25', 'ACK-ITR-2425'); mark('audit:2024', '2025-09-26', 'UDIN-3CD-2425'); mark('audit:2025', '2026-09-24', 'UDIN-3CD-2526');
     const qOf = d => { const m = +d.slice(5, 7); return m >= 4 && m <= 6 ? 0 : m >= 7 && m <= 9 ? 1 : m >= 10 ? 2 : 3; };
     const seen = new Set();
@@ -1541,7 +1561,7 @@ function mobileTables(root) {
     if (t.dataset.ml) return; t.dataset.ml = '1';
     if (t.matches(MATRIX_SEL)) { t.classList.add('mx'); return; }
     const hr = t.tHead && t.tHead.rows[t.tHead.rows.length - 1]; if (!hr) return;
-    const heads = []; [...hr.cells].forEach(c => { for (let k = 0; k < (c.colSpan || 1); k++) heads.push(k ? '' : c.innerText.replace(/\s+/g, ' ').trim()); });
+    const heads = [];[...hr.cells].forEach(c => { for (let k = 0; k < (c.colSpan || 1); k++) heads.push(k ? '' : c.innerText.replace(/\s+/g, ' ').trim()); });
     t.classList.add('mcard');
     [...t.tBodies, ...(t.tFoot ? [t.tFoot] : [])].forEach(sec => [...sec.rows].forEach(tr => {
       let i = 0; const cells = [...tr.cells];
@@ -1662,7 +1682,7 @@ PAGES.dashboard = {
     const depNodes = api.list('departments').map(d => ({
       key: 'dash:d:' + d.id, label: d.name, id: d.id,
       children: [...BUCKETS.inflow.map(([b, l]) => ({ key: 'dash:d:' + d.id + ':' + b, label: l, t: 'inflow', ins: v1(dIn, d.id + '|' + b), outs: 0, id: d.id, b })),
-                 ...BUCKETS.outflow.map(([b, l]) => ({ key: 'dash:d:' + d.id + ':' + b, label: l, t: 'outflow', ins: 0, outs: v1(dOut, d.id + '|' + b), id: d.id, b }))].filter(x => x.ins || x.outs),
+      ...BUCKETS.outflow.map(([b, l]) => ({ key: 'dash:d:' + d.id + ':' + b, label: l, t: 'outflow', ins: 0, outs: v1(dOut, d.id + '|' + b), id: d.id, b }))].filter(x => x.ins || x.outs),
     })).map(n => ({ ...n, ins: sum(n.children, c => c.ins), outs: sum(n.children, c => c.outs) })).filter(n => n.ins || n.outs).sort((a, b) => b.outs - a.outs);
     const totOut = sum(depNodes, x => x.outs);
     const depCells = (n, depth) => `<td class="num in">${n.ins ? money(n.ins) : '<span class="faint">—</span>'}</td><td class="num out">${n.outs ? money(n.outs) : '<span class="faint">—</span>'}</td><td class="num ${n.ins - n.outs >= 0 ? 'in' : 'out'}">${depth ? '' : money(n.ins - n.outs, { sign: true })}</td><td>${n.outs ? `<div class="row" style="gap:8px;flex-wrap:nowrap">${depth ? '<span style="width:60px;flex:none"></span>' : bar(pct(n.outs, totOut), 'gold')}<span class="muted num" style="font-size:12px;min-width:44px;text-align:right">${fmtPct(pct(n.outs, totOut))}</span></div>` : ''}</td><td class="nowrap" style="width:40px"><button class="icon-btn xs" title="Open in Transactions" data-act="ledger-drill" data-drill="${esc(JSON.stringify(n.b ? { departmentId: n.id, bucket: n.b } : { departmentId: n.id }))}">${icon('ext')}</button></td>`;
@@ -1673,8 +1693,10 @@ PAGES.dashboard = {
       </tbody><tfoot><tr><td>Total</td><td class="num in">${money(sum(depNodes, n => n.ins))}</td><td class="num out">${money(totOut)}</td><td class="num">${money(sum(depNodes, n => n.ins) - totOut, { sign: true })}</td><td></td><td></td></tr></tfoot></table></div></div>`;
 
     // outflow by bucket — expandable to categories
-    const catTotals = aggregate(ents.filter(e => e.type === 'outflow' && filt(e)), [{ months: months }], e => e.categoryId);
-    const bNodes = finishTree(categoryTree('outflow', c => catTotals[c.id] || [0], 'dash:b:'), 1);
+    const catTotals = (typeof aggregate === 'function' && Array.isArray(ents))
+      ? aggregate(ents.filter(e => e.type === 'outflow' && filt(e)), [{ months: months }], e => e.categoryId)
+      : {};
+    const bNodes = finishTree(categoryTree('outflow', c => (catTotals && catTotals[c.id]) || [0], 'dash:b:'), 1);
     bNodes.forEach(n => {
       if (n.children) {
         n.children.sort((a, b) => ((b.vals?.[0] || 0) - (a.vals?.[0] || 0)));
@@ -1931,6 +1953,26 @@ function categoryTree(type, valsOf, scope, drillBase = {}) {
       }
     }
   }
+  if (type === 'outflow' && typeof Store !== 'undefined' && Store.data?.fss_outflow_oc_people) {
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const existingNames = new Set(cats.map(c => norm(c.name)));
+    for (const r of Store.data.fss_outflow_oc_people) {
+      const rName = norm(r.category);
+      if (!rName.includes('total') && !existingNames.has(rName)) {
+        cats = [
+          ...cats,
+          {
+            id: 'oc_ppl_' + r.id,
+            name: r.category,
+            type: 'outflow',
+            group: 'People',
+            bucket: 'op_cost'
+          }
+        ];
+        existingNames.add(rName);
+      }
+    }
+  }
   if (type === 'inflow' && typeof Store !== 'undefined' && Store.data?.fss_financing) {
     const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
     const existingNames = new Set(cats.map(c => norm(c.name)));
@@ -1975,10 +2017,27 @@ function categoryTree(type, valsOf, scope, drillBase = {}) {
     const bc = cats.filter(c => bucketOf(c) === bid);
     return {
       key: scope + type + ':' + bid, label: bl, drill: { ...drillBase, bucket: bid },
-      children: [...new Set(bc.map(c => c.group))].map(g => ({
-        key: scope + type + ':' + bid + ':' + g, label: g, drill: { ...drillBase, bucket: bid, group: g },
-        children: bc.filter(c => c.group === g).map(c => ({ key: scope + 'c:' + c.id, label: c.name, vals: valsOf(c), drill: { ...drillBase, categoryId: c.id } })),
-      })),
+      children: [...new Set(bc.map(c => c.group))].map(g => {
+        let groupCats = bc.filter(c => c.group === g);
+        if (g === 'People') {
+          const ORDER = ['salaries', 'ceo fixed salary', 'staff welfare'];
+          const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+          groupCats = groupCats.slice().sort((a, b) => {
+            const aName = norm(a.name);
+            const bName = norm(b.name);
+            const aIdx = ORDER.findIndex(o => aName.includes(o));
+            const bIdx = ORDER.findIndex(o => bName.includes(o));
+            if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+            if (aIdx !== -1) return -1;
+            if (bIdx !== -1) return 1;
+            return 0;
+          });
+        }
+        return {
+          key: scope + type + ':' + bid + ':' + g, label: g, drill: { ...drillBase, bucket: bid, group: g },
+          children: groupCats.map(c => ({ key: scope + 'c:' + c.id, label: c.name, vals: valsOf(c), drill: { ...drillBase, categoryId: c.id } })),
+        };
+      }),
     };
   });
   return nodes;
@@ -2342,6 +2401,207 @@ if (typeof window !== 'undefined') {
   (window as any).__computeCashflowInflowRows = computeCashflowInflowRows;
 }
 
+/** Computes rows formatted for Supabase fss_outflow_oc_people */
+export function computeCashflowPeopleRows(entries?: any[], fy = 2026) {
+  const currentFy = fy || (typeof S !== 'undefined' && S.fy) || 2026;
+  const periods = typeof fyPeriods === 'function' ? fyPeriods(currentFy, 'monthly') : [];
+  const [fyF, fyT] = typeof fyRange === 'function' ? fyRange(currentFy) : ['2026-04-01', '2027-03-31'];
+
+  const allEntries = entries || (typeof api !== 'undefined' && typeof api.list === 'function' ? api.list('entries') : []) || [];
+  const activeEntries = allEntries.filter((e: any) => !e.deleted && e.type !== 'transfer' && (!fyF || e.date >= fyF) && (!fyT || e.date <= fyT));
+  const activeOutflows = activeEntries.filter((e: any) => e.type === 'outflow');
+
+  const monthCols = [
+    { col: 'jan_26', ym: null },
+    { col: 'feb_26', ym: null },
+    { col: 'mar_26', ym: null },
+    { col: 'apr_26', ym: '2026-04' },
+    { col: 'may_26', ym: '2026-05' },
+    { col: 'jun_26', ym: '2026-06' },
+    { col: 'jul_26', ym: '2026-07' },
+    { col: 'aug_26', ym: '2026-08' },
+    { col: 'sep_26', ym: '2026-09' },
+    { col: 'oct_26', ym: '2026-10' },
+    { col: 'nov_26', ym: '2026-11' },
+    { col: 'dec_26', ym: '2026-12' },
+  ];
+
+  const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+  const existingRows = (typeof Store !== 'undefined' && Store.data?.fss_outflow_oc_people) || [];
+
+  const getMonthlyForCategory = (catName: string, filterFn: (e: any) => boolean, rowId?: number) => {
+    const existing = existingRows.find((r: any) => (rowId && r.id === rowId) || norm(r.category) === norm(catName));
+    const result: Record<string, number> = {};
+    for (const m of monthCols) {
+      if (!m.ym) {
+        result[m.col] = 0;
+        continue;
+      }
+      const total = activeOutflows
+        .filter((e: any) => {
+          if (!filterFn(e)) return false;
+          return (e.date || '').slice(0, 7) === m.ym;
+        })
+        .reduce((s: number, e: any) => s + (Number(e.amount != null ? e.amount : e.taxable) || 0), 0);
+
+      if (total > 0) {
+        result[m.col] = Math.round(total * 100) / 100;
+      } else if (existing && existing[m.col] != null) {
+        result[m.col] = Math.round(Number(existing[m.col]) * 100) / 100;
+      } else {
+        result[m.col] = 0;
+      }
+    }
+    return result;
+  };
+
+  const isSalaries = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || e.description || '').toLowerCase();
+    return cid === 'cat_sal' || (cname.includes('salar') && !cname.includes('ceo'));
+  };
+
+  const isCeo = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || e.description || '').toLowerCase();
+    return cid === 'cat_ceo' || cid === 'cat_ceofix' || cname.includes('ceo');
+  };
+
+  const isWelfare = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || e.description || '').toLowerCase();
+    return cid === 'cat_welfare' || cname.includes('welfare');
+  };
+
+  const salaries = getMonthlyForCategory('Salaries', isSalaries, 1);
+  const ceo = getMonthlyForCategory('CEO Fixed Salary', isCeo, 2);
+  const welfare = getMonthlyForCategory('Staff Welfare', isWelfare, 3);
+
+  const peopleRows: any[] = [
+    { id: 1, category: 'Salaries', ...salaries },
+    { id: 2, category: 'CEO Fixed Salary', ...ceo },
+    { id: 3, category: 'Staff Welfare', ...welfare }
+  ];
+
+  for (const r of existingRows) {
+    const rName = norm(r.category);
+    if (!rName.includes('total') && !['salaries', 'ceo fixed salary', 'staff welfare'].includes(rName)) {
+      const rowData: Record<string, number> = {};
+      for (const m of monthCols) {
+        rowData[m.col] = m.ym ? Number(r[m.col] || 0) : 0;
+      }
+      peopleRows.push({
+        id: r.id,
+        category: r.category,
+        ...rowData
+      });
+    }
+  }
+
+  return peopleRows;
+}
+
+/** Computes rows formatted for Supabase fss_outflow_project_cost (FSS Outflow - Project Costs) */
+export function computeCashflowOutflowProjectCostRows(entries?: any[], fy = 2026) {
+  const currentFy = fy || (typeof S !== 'undefined' && S.fy) || 2026;
+  const periods = typeof fyPeriods === 'function' ? fyPeriods(currentFy, 'monthly') : [];
+  const [fyF, fyT] = typeof fyRange === 'function' ? fyRange(currentFy) : ['2026-04-01', '2027-03-31'];
+  const allEntries = entries || (typeof api !== 'undefined' && typeof api.list === 'function' ? api.list('entries') : []) || [];
+  const activeEntries = allEntries.filter((e: any) => !e.deleted && e.type !== 'transfer' && (!fyF || e.date >= fyF) && (!fyT || e.date <= fyT));
+  const activeOutflows = activeEntries.filter((e: any) => e.type === 'outflow');
+  const monthCols = [
+    { col: 'jan_26', ym: null },
+    { col: 'feb_26', ym: null },
+    { col: 'mar_26', ym: null },
+    { col: 'apr_26', ym: '2026-04' },
+    { col: 'may_26', ym: '2026-05' },
+    { col: 'jun_26', ym: '2026-06' },
+    { col: 'jul_26', ym: '2026-07' },
+    { col: 'aug_26', ym: '2026-08' },
+    { col: 'sep_26', ym: '2026-09' },
+    { col: 'oct_26', ym: '2026-10' },
+    { col: 'nov_26', ym: '2026-11' },
+    { col: 'dec_26', ym: '2026-12' }
+  ];
+  const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+  const storedRows = (typeof Store !== 'undefined' && Store.data?.fss_outflow_project_cost) || [];
+
+  const computeMonthly = (catName: string, useStored: boolean, storedRow?: any): Record<string, number> => {
+    const result: Record<string, number> = {};
+    for (const m of monthCols) {
+      if (!m.ym) {
+        result[m.col] = 0;
+        continue;
+      }
+      let total = 0;
+      let hasStored = false;
+      if (useStored && storedRow) {
+        const sv = storedRow[m.col];
+        if (sv !== null && sv !== undefined) { total = Number(sv); hasStored = true; }
+      }
+      if (!hasStored) {
+        total = activeOutflows
+          .filter((e: any) => norm(e.category || '') === norm(catName) && (e.date || '').slice(0, 7) === m.ym)
+          .reduce((s: number, e: any) => s + (Number(e.amount || e.netCash || e.taxable) || 0), 0);
+      }
+      result[m.col] = Math.round(total * 100) / 100;
+    }
+    return result;
+  };
+
+  const rows: any[] = [];
+  const seen = new Set<string>();
+  const pushRow = (category: string, monthly: Record<string, number>) => {
+    const key = norm(category);
+    if (!key || key.includes('total') || seen.has(key)) return;
+    seen.add(key);
+    let fytd = 0;
+    for (const m of monthCols) {
+      if (String(m.col) >= 'apr_26') fytd += Number(monthly[m.col]) || 0;
+    }
+    rows.push({ category, ...monthly, fy_to_date: Math.round(fytd * 100) / 100 });
+  };
+
+  for (const r of storedRows) {
+    const rName = norm(r.category);
+    if (rName.includes('total')) continue;
+    pushRow(r.category, computeMonthly(r.category, true, r));
+  }
+
+  const cats: any[] = [];
+  if (typeof api !== 'undefined' && typeof (api as any).list === 'function') {
+    cats.push(...((api as any).list('categories') || []).filter((c: any) => c.type === 'outflow' && String(c.group || '').toLowerCase().includes('project cost')));
+  }
+  for (const c of cats) {
+    const cName = c.name || '';
+    if (seen.has(norm(cName))) continue;
+    pushRow(cName, computeMonthly(cName, false));
+  }
+
+  const recomputed = rows.map((r: any) => {
+    let fytd = 0;
+    for (const m of monthCols) {
+      if (String(m.col) >= 'apr_26') fytd += Number(r[m.col]) || 0;
+    }
+    const rowFy = Math.round(fytd * 100) / 100;
+    return { ...r, fy_to_date: rowFy };
+  });
+  const totalFy = recomputed.reduce((s: number, r: any) => s + (Number(r.fy_to_date) || 0), 0);
+  const finalRows = recomputed.map((r: any) => ({
+    ...r,
+    shares: totalFy > 0 ? Math.round((Number(r.fy_to_date) || 0) / totalFy * 1000) / 10 : 0
+  }));
+
+  return { rows: finalRows };
+}
+
+if (typeof window !== 'undefined') {
+  (window as any).__computeCashflowPeopleRows = computeCashflowPeopleRows;
+}
+if (typeof window !== 'undefined') {
+  (window as any).__computeCashflowOutflowProjectCostRows = computeCashflowOutflowProjectCostRows;
+}
+
 
 
 /* shared helpers: share-of-total %, heat shading, best/lowest among completed periods */
@@ -2366,8 +2626,10 @@ function revenuePerfHTML(fy, periods, fyF, lastTo) {
   const unit = C.period === 'quarterly' ? 'quarter' : 'month';
   const open = S.rpDeps !== false;
   const cells = periods.map((p, i) => `<td class="num rp-h ${p.cur ? 'cur' : ''}" ${heat(tot[i], mx)}><b>${f1(pc(tot[i], T))}</b>${tag(R, i)}</td>`).join('');
-  const depRows = deps.map(d => { const vals = byDep[d.id], DT = sum(vals), dm = Math.max(0, ...vals), DR = rank(vals); const dtg = periods.map(p => d.id === '_none' ? 0 : tgtOf(p, d.id)), DTG = sum(dtg);
-    return `<tr class="rp-dep"><td><div class="cell-main">${esc(d.name)}</div><div class="cell-sub">${money(DT)}${DTG ? ' · ' + f1(pc(DT, DTG)) + ' of target' : ''}</div></td>${periods.map((p, i) => `<td class="num rp-h ${p.cur ? 'cur' : ''}" ${heat(vals[i], dm)} title="${esc(d.name)} · ${esc(p.label)}: ${money(vals[i])}${dtg[i] ? ' · target ' + money(dtg[i]) : ''}">${vals[i] ? `<b>${f1(pc(vals[i], DT))}</b>${tag(DR, i)}<div class="rp-amt">${money(vals[i])}</div>` : '<span class="faint">–</span>'}</td>`).join('')}<td class="num tot-c"><b>100%</b><div class="rp-amt">${money(DT)}</div></td><td class="num share"><span class="muted">${f1(pc(DT, T))}</span></td></tr>`; }).join('');
+  const depRows = deps.map(d => {
+    const vals = byDep[d.id], DT = sum(vals), dm = Math.max(0, ...vals), DR = rank(vals); const dtg = periods.map(p => d.id === '_none' ? 0 : tgtOf(p, d.id)), DTG = sum(dtg);
+    return `<tr class="rp-dep"><td><div class="cell-main">${esc(d.name)}</div><div class="cell-sub">${money(DT)}${DTG ? ' · ' + f1(pc(DT, DTG)) + ' of target' : ''}</div></td>${periods.map((p, i) => `<td class="num rp-h ${p.cur ? 'cur' : ''}" ${heat(vals[i], dm)} title="${esc(d.name)} · ${esc(p.label)}: ${money(vals[i])}${dtg[i] ? ' · target ' + money(dtg[i]) : ''}">${vals[i] ? `<b>${f1(pc(vals[i], DT))}</b>${tag(DR, i)}<div class="rp-amt">${money(vals[i])}</div>` : '<span class="faint">–</span>'}</td>`).join('')}<td class="num tot-c"><b>100%</b><div class="rp-amt">${money(DT)}</div></td><td class="num share"><span class="muted">${f1(pc(DT, T))}</span></td></tr>`;
+  }).join('');
   if (!T && !TG) return '';
   const lbl = i => esc(periods[i].label.replace(' · to date', ''));
   const shown = !!S.rpOpen;
@@ -2418,10 +2680,12 @@ PAGES.cashflow = {
               '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
               '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
             };
-            return periods.map((p: any) => {
+            return periods.map((p: any, i: number) => {
               const m = p.months[0];
               const col = M_COL[m.slice(5, 7)] || 'apr_26';
-              return Number(matchOp[col] ?? 0);
+              const sbVal = Number(matchOp[col] ?? 0);
+              const liveVal = (agg[c.id] || [])[i] || 0;
+              return Math.max(liveVal, sbVal);
             });
           }
 
@@ -2443,10 +2707,12 @@ PAGES.cashflow = {
               '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
               '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
             };
-            return periods.map((p: any) => {
+            return periods.map((p: any, i: number) => {
               const m = p.months[0];
               const col = M_COL[m.slice(5, 7)] || 'apr_26';
-              return Number(matchFin[col] ?? 0);
+              const sbVal = Number(matchFin[col] ?? 0);
+              const liveVal = (agg[c.id] || [])[i] || 0;
+              return Math.max(liveVal, sbVal);
             });
           }
 
@@ -2468,21 +2734,106 @@ PAGES.cashflow = {
               '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
               '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
             };
-            return periods.map((p: any) => {
+            return periods.map((p: any, i: number) => {
               const m = p.months[0];
               const col = M_COL[m.slice(5, 7)] || 'apr_26';
-              return Number(matchInc[col] ?? 0);
+              const sbVal = Number(matchInc[col] ?? 0);
+              const liveVal = (agg[c.id] || [])[i] || 0;
+              return Math.max(liveVal, sbVal);
             });
           }
 
           return agg[c.id] || periods.map(() => 0);
         };
-        tree[type] = finishTree(categoryTree(type, type === 'inflow' ? inflowValsOf : (c => agg[c.id] || periods.map(() => 0)), scope), len);
+        const outflowValsOf = (c: any) => {
+          const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+          const storedCostRows = (Store.data?.fss_outflow_project_cost || []).filter((r: any) => !norm(r.category).includes('total'));
+          const storedCost = storedCostRows.find((r: any) => norm(r.category) === norm(c.name));
+          if (storedCost) {
+            const M_COL: Record<string, string> = {
+              '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
+              '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
+              '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
+              '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
+            };
+            return periods.map((p: any, i: number) => {
+              const monthsArr = p.months && p.months.length > 0 ? p.months : (p.from ? [p.from.slice(0, 7)] : []);
+              const sbVal = monthsArr.reduce((sum: number, ym: string) => {
+                const col = M_COL[ym.slice(5, 7)] || 'apr_26';
+                return sum + Number(storedCost[col] ?? 0);
+              }, 0);
+              const liveVal = (agg[c.id] || [])[i] || 0;
+              return Math.max(liveVal, sbVal);
+            });
+          }
+          const financingOwnerRows = (Store.data?.fss_outflow_financing_and_owner || []).filter((r: any) => {
+            const name = norm(r.category);
+            return !name.includes('total');
+          });
+          const matchFinancingOwner = financingOwnerRows.find((r: any) => {
+            const rName = norm(r.category);
+            const cName = norm(c.name);
+            return rName === cName;
+          });
+          if (matchFinancingOwner) {
+            const M_COL: Record<string, string> = {
+              '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
+              '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
+              '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
+              '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
+            };
+            return periods.map((p: any, i: number) => {
+              const monthsArr = p.months && p.months.length > 0 ? p.months : (p.from ? [p.from.slice(0, 7)] : []);
+              const sbVal = monthsArr.reduce((sum: number, ym: string) => {
+                const col = M_COL[ym.slice(5, 7)] || 'apr_26';
+                const v = matchFinancingOwner[col];
+                return sum + (v === null || v === undefined ? 0 : Number(v));
+              }, 0);
+              const liveVal = (agg[c.id] || [])[i] || 0;
+              return Math.max(liveVal, sbVal);
+            });
+          }
+
+          const peopleRows = (Store.data?.fss_outflow_oc_people || []).filter((r: any) => {
+            const name = norm(r.category);
+            return !name.includes('total');
+          });
+          const matchPpl = peopleRows.find((r: any) => {
+            const rName = norm(r.category);
+            const cName = norm(c.name);
+            return rName === cName ||
+              (c.id === 'cat_sal' && rName.includes('salar') && !rName.includes('ceo')) ||
+              (c.id === 'cat_ceo' && rName.includes('ceo')) ||
+              (c.id === 'cat_welfare' && rName.includes('welfare')) ||
+              (c.id === 'oc_ppl_' + r.id);
+          });
+          if (matchPpl) {
+            const M_COL: Record<string, string> = {
+              '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
+              '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
+              '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
+              '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
+            };
+            return periods.map((p: any, i: number) => {
+              const monthsArr = p.months && p.months.length > 0 ? p.months : (p.from ? [p.from.slice(0, 7)] : []);
+              const sbVal = monthsArr.reduce((sum: number, ym: string) => {
+                const col = M_COL[ym.slice(5, 7)] || 'apr_26';
+                return sum + Number(matchPpl[col] ?? 0);
+              }, 0);
+              const liveVal = (agg[c.id] || [])[i] || 0;
+              return Math.max(liveVal, sbVal);
+            });
+          }
+          return agg[c.id] || periods.map(() => 0);
+        };
+        tree[type] = finishTree(categoryTree(type, type === 'inflow' ? inflowValsOf : outflowValsOf, scope), len);
       } else {
         const agg = aggregate(te, periods, e => (e.departmentId || '_none') + '|' + bucketOf(api.get('categories', e.categoryId)));
         const deps = [...api.list('departments'), { id: '_none', name: 'No department' }];
-        tree[type] = finishTree(deps.map(d => ({ key: scope + type + ':' + d.id, label: d.name, drill: d.id === '_none' ? {} : { departmentId: d.id },
-          children: BUCKETS[type].map(([bid, bl]) => ({ key: scope + type + ':' + d.id + ':' + bid, label: bl, vals: agg[d.id + '|' + bid] || periods.map(() => 0), drill: { ...(d.id === '_none' ? {} : { departmentId: d.id }), bucket: bid } })) })), len);
+        tree[type] = finishTree(deps.map(d => ({
+          key: scope + type + ':' + d.id, label: d.name, drill: d.id === '_none' ? {} : { departmentId: d.id },
+          children: BUCKETS[type].map(([bid, bl]) => ({ key: scope + type + ':' + d.id + ':' + bid, label: bl, vals: agg[d.id + '|' + bid] || periods.map(() => 0), drill: { ...(d.id === '_none' ? {} : { departmentId: d.id }), bucket: bid } }))
+        })), len);
         tree[type].sort((a, b) => sum(b.vals) - sum(a.vals));
       }
     }
@@ -2550,8 +2901,25 @@ PAGES.cashflow = {
         }
       }
 
-      const cellClass = `num ${v ? 'hit' : 'zero'} ${p.cur ? 'cur' : ''} ${opAttrs ? 'op-cell' : ''} ${finAttrs ? 'fin-cell' : ''} ${incAttrs ? 'inc-cell' : ''}`;
-      return `<td class="${cellClass}" ${v && n.drill ? drillAttr(type, n.drill, p.from, p.to) : ''} ${opAttrs} ${finAttrs} ${incAttrs}>${v ? money(v) : '–'}</td>`;
+      let peopleAttrs = '';
+      if (type === 'outflow' && depth > 0 && Store.data?.fss_outflow_oc_people) {
+        const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+        const rName = norm(n.label);
+        const matchPpl = Store.data.fss_outflow_oc_people.find((r: any) => {
+          const name = norm(r.category);
+          return name === rName ||
+            (n.drill?.categoryId === 'cat_sal' && name.includes('salar') && !name.includes('ceo')) ||
+            (n.drill?.categoryId === 'cat_ceo' && name.includes('ceo')) ||
+            (n.drill?.categoryId === 'cat_welfare' && name.includes('welfare')) ||
+            (n.drill?.categoryId === 'oc_ppl_' + r.id);
+        });
+        if (matchPpl && !matchPpl.category.toLowerCase().includes('total')) {
+          peopleAttrs = `data-people-id="${matchPpl.id}" data-people-col="${col}" data-people-val="${v || 0}" data-people-name="${esc(matchPpl.category)}"`;
+        }
+      }
+
+      const cellClass = `num ${v ? 'hit' : 'zero'} ${p.cur ? 'cur' : ''} ${opAttrs ? 'op-cell' : ''} ${finAttrs ? 'fin-cell' : ''} ${incAttrs ? 'inc-cell' : ''} ${peopleAttrs ? 'people-cell' : ''}`;
+      return `<td class="${cellClass}" ${v && n.drill ? drillAttr(type, n.drill, p.from, p.to) : ''} ${opAttrs} ${finAttrs} ${incAttrs} ${peopleAttrs}>${v ? money(v) : '–'}</td>`;
     }).join('')
       + `<td class="num tot-c" ${n.drill ? drillAttr(type, n.drill, fyF, lastTo) : ''}>${money(sum(n.vals))}</td><td class="num share"><span class="${depth ? 'faint' : 'muted'}">${fmtPct(pct(sum(n.vals), base))}</span></td>`;
     const balCells = vals => periods.map((p, i) => `<td class="num ${p.cur ? 'cur' : ''} ${vals[i] < 0 ? 'out' : ''}">${money(vals[i])}</td>`).join('') + '<td class="num tot-c"></td><td></td>';
@@ -2723,11 +3091,31 @@ function subOfEntry(kind, v) {
 }
 function lastEntry(pred) { let best = null; for (const e of Calc.live()) if (pred(e) && (!best || e.date > best.date || (e.date === best.date && (e.createdAt || '') > (best.createdAt || '')))) best = e; return best; }
 function catsFor(F) {
-  const all = api.list('categories').filter(c => c.active || c.id === F.v.categoryId);
+  let all = api.list('categories').filter(c => c.active || c.id === F.v.categoryId);
+  if (F.v?.type === 'outflow' && typeof Store !== 'undefined' && Store.data?.fss_outflow_oc_people) {
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const existingNames = new Set(all.map(c => norm(c.name)));
+    for (const r of Store.data.fss_outflow_oc_people) {
+      const rName = norm(r.category);
+      if (!rName.includes('total') && !existingNames.has(rName)) {
+        all = [
+          ...all,
+          {
+            id: 'oc_ppl_' + r.id,
+            name: r.category,
+            type: 'outflow',
+            group: 'People',
+            bucket: 'op_cost'
+          }
+        ];
+        existingNames.add(rName);
+      }
+    }
+  }
   if (F.allCats) return all.filter(c => c.type === F.v.type);
   switch (F.kind) {
-    case 'vendor': return all.filter(c => c.type === 'outflow' && c.partyKind === 'vendor');
-    case 'other_out': return all.filter(c => c.type === 'outflow' && c.partyKind !== 'vendor' && c.partyKind !== 'employee' && c.kind !== 'tax' && c.id !== 'cat_ptax');
+    case 'vendor': return all.filter(c => c.type === 'outflow' && (c.partyKind === 'vendor' || c.group === 'People'));
+    case 'other_out': return all.filter(c => c.type === 'outflow' && c.kind !== 'tax' && c.id !== 'cat_ptax');
     case 'other_in': return all.filter(c => c.type === 'inflow' && c.partyKind !== 'client');
     case 'client': return all.filter(c => c.type === 'inflow' && c.partyKind === 'client');
     default: return all.filter(c => c.type === F.v.type);
@@ -2843,7 +3231,7 @@ function openEntryForm({ mode = 'new', entry = null, rec = null, period = null, 
     if (a === 'kind-reset') { F.kind = null; F.errs = {}; return draw(); }
     if (a === 'sub') { if (F.kind === 'employee') setEmpSub(F, b.dataset.v); else setTaxSub(F, b.dataset.v); return draw(); }
     if (a === 'pick-pi') { pickPI(F, b.dataset.id); return draw(); }
-    if (a === 'nopi') { F.piMode = 'nopi'; if (v.piId) { v.piId = ''; ['projectId', 'refNo', 'description', 'categoryId'].forEach(k => { if (F.auto[k]) { v[k] = ''; F.auto[k] = false; } }); if (F.auto.departmentId) { v.departmentId = ''; F.auto.departmentId = false; F.deptAuto = true; } v.taxable = ''; } F.open.cat = !v.categoryId; F.open.dept = !v.departmentId; return draw(); }
+    if (a === 'nopi') { F.piMode = 'nopi'; if (v.piId) { v.piId = '';['projectId', 'refNo', 'description', 'categoryId'].forEach(k => { if (F.auto[k]) { v[k] = ''; F.auto[k] = false; } }); if (F.auto.departmentId) { v.departmentId = ''; F.auto.departmentId = false; F.deptAuto = true; } v.taxable = ''; } F.open.cat = !v.categoryId; F.open.dept = !v.departmentId; return draw(); }
     if (a === 'usepi') { F.piMode = 'pi'; return draw(); }
     if (a === 'open') { const k = b.dataset.k; if (k === 'more') F.more = !F.more; else if (k === 'email') F.emailOpen = !F.emailOpen; else if (k === 'gst') { F.showGst = true; if (!+v.gstRate) { v.gstRate = 18; const p = api.get('parties', v.partyId); v.gstType = p && p.gstType !== 'none' ? p.gstType : 'intra'; F.gstAuto = true; } } else if (k === 'tds') { F.showTds = true; if (!+v.tdsRate) { v.tdsRate = F.kind === 'vendor' ? 2 : 10; F.tdsAuto = true; } } else if (k === 'allcats') F.allCats = !F.allCats; else F.open[k] = !F.open[k]; return draw(); }
     if (a === 'use-suggest') { v.taxable = +b.dataset.v; F.gstAuto = F.tdsAuto = true; return draw(); }
@@ -2879,9 +3267,11 @@ function applyBankLock(F) {
   const B = F.bank; if (!B) return; const v = F.v;
   if (B.date) v.date = B.date; if (B.accountId && v.type !== 'transfer') v.accountId = B.accountId; if (B.txnRef) v.txnRef = B.txnRef; if (B.paymentMode) v.paymentMode = B.paymentMode;
   if (v.type === 'transfer' || F.kind === 'transfer') { v.amount = B.net; if (B.accountId) v.accountId = B.accountId; return; }
-  if (!F.bankTyped) { v.taxable = taxableForNet(B.net, v.gstRate, v.tdsRate); F.auto.taxable = false; F.gstAuto = F.tdsAuto = true;
+  if (!F.bankTyped) {
+    v.taxable = taxableForNet(B.net, v.gstRate, v.tdsRate); F.auto.taxable = false; F.gstAuto = F.tdsAuto = true;
     const g = r2(v.taxable * (+v.gstRate || 0) / 100), t = r2(v.taxable * (+v.tdsRate || 0) / 100), diff = r2(B.net - (v.taxable + g - t));
-    if (diff && Math.abs(diff) <= 0.05 && +v.gstRate > 0) { v.gstAmount = r2(g + diff); v.tdsAmount = t; F.gstAuto = false; } }
+    if (diff && Math.abs(diff) <= 0.05 && +v.gstRate > 0) { v.gstAmount = r2(g + diff); v.tdsAmount = t; F.gstAuto = false; }
+  }
 }
 /* ---- kind setup & memory ---- */
 function resetForKind(F, k) {
@@ -3127,7 +3517,7 @@ async function saveEntryFromForm(F) {
   const saved = await api.saveEntry(input, F.mode === 'edit' ? v.id : null);
   if (tiPI && !tiPI.taxInvoiceDate) { try { await issueTaxInvoice(tiPI.id, saved.date, saved.refNo); } catch (err) { toast('Saved, but the tax invoice was not issued: ' + err.message, 'error'); } }
   const mail = await finalizeEmail(F.email, { entity: 'entries', entityId: saved.id, docs: saved.attachments || [] }).catch(err => { toast('Saved, but the email was not queued: ' + err.message, 'error'); return null; });
-  for (const id of F.removed) await FileStore.del(id).catch(() => {});
+  for (const id of F.removed) await FileStore.del(id).catch(() => { });
   if (F.repeat && F.mode === 'new') {
     const r = { name: (nameOf('categories', saved.categoryId) + ' – ' + nameOf('parties', saved.partyId)).slice(0, 60), type: saved.type, categoryId: saved.categoryId, departmentId: saved.departmentId, partyId: saved.partyId, projectId: saved.projectId, description: saved.description, taxable: saved.taxable, gstType: saved.gstType, gstRate: saved.gstRate, tdsRate: saved.tdsRate, itc: saved.itc, paymentMode: saved.paymentMode, accountId: saved.accountId, frequency: F.rFreq, dayOfMonth: +saved.date.slice(8), startDate: saved.date, endDate: null, active: true, skipped: [] };
     const rr = await api.create('recurring', r);
@@ -3219,7 +3609,8 @@ const REPORTS = {
   projects() {
     const scopeAll = S.projScope === 'all'; const [from, to] = fyRange(S.fy);
     const ents = Calc.live().filter(e => e.projectId && (scopeAll || (e.date >= from && e.date <= to)));
-    const rows = api.list('projects').map(p0 => { const p = { ...p0, contractValue: Sales.projectContract(p0.id) };
+    const rows = api.list('projects').map(p0 => {
+      const p = { ...p0, contractValue: Sales.projectContract(p0.id) };
       const es = ents.filter(e => e.projectId === p.id);
       const rec = sum(es.filter(e => e.type === 'inflow'), e => e.taxable), cost = sum(es.filter(e => e.type === 'outflow'), e => e.taxable);
       const cin = sum(es.filter(e => e.type === 'inflow'), e => e.amount), cout = sum(es.filter(e => e.type === 'outflow'), e => e.amount);
@@ -3228,9 +3619,11 @@ const REPORTS = {
     const T = k => sum(rows, r => r[k]);
     return `<div class="toolbar"><div class="seg">${[['all', 'All time'], ['fy', fyLabel(S.fy)]].map(([k, l]) => `<button class="${S.projScope === k ? 'on' : ''}" data-act="proj-scope" data-v="${k}">${l}</button>`).join('')}</div><span class="spacer"></span><span class="muted" style="font-size:12.5px;max-width:520px">Receipts and direct costs are shown pre-GST (taxable value). Contribution = receipts − costs tagged to the project; salaries and overheads are not allocated.</span></div>
     <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Project</th><th>Client</th><th>Dept</th><th>Status</th><th class="num">Contract value</th><th class="num">Received</th><th style="width:120px">Collected</th><th class="num">Direct costs</th><th class="num">Contribution</th><th class="num">Margin</th><th class="num">Net cash</th></tr></thead><tbody>
-    ${rows.map(r => { const col = pct(r.rec, r.p.contractValue); const m = pct(r.contrib, r.rec); return `<tr class="click" data-act="ledger-proj" data-id="${r.p.id}"><td><div class="cell-main">${esc(r.p.code)}</div><div class="cell-sub">${esc(r.p.name)}</div></td><td>${esc(nameOf('parties', r.p.clientId))}</td><td class="nowrap">${esc(nameOf('departments', r.p.departmentId))}</td><td><span class="chip ${r.p.status === 'active' ? 'gold' : ''}">${esc(r.p.status)}</span></td>
+    ${rows.map(r => {
+      const col = pct(r.rec, r.p.contractValue); const m = pct(r.contrib, r.rec); return `<tr class="click" data-act="ledger-proj" data-id="${r.p.id}"><td><div class="cell-main">${esc(r.p.code)}</div><div class="cell-sub">${esc(r.p.name)}</div></td><td>${esc(nameOf('parties', r.p.clientId))}</td><td class="nowrap">${esc(nameOf('departments', r.p.departmentId))}</td><td><span class="chip ${r.p.status === 'active' ? 'gold' : ''}">${esc(r.p.status)}</span></td>
       <td class="num">${r.p.contractValue ? money(r.p.contractValue) : '—'}</td><td class="num in">${money(r.rec)}</td><td>${r.p.contractValue ? `<div class="row" style="gap:6px;flex-wrap:nowrap">${bar(col, 'in')}<span class="num muted" style="font-size:11.5px">${Math.round(col)}%</span></div>` : ''}</td>
-      <td class="num out">${money(r.cost)}</td><td class="num" style="font-weight:600">${money(r.contrib)}</td><td class="num ${m < 50 ? 'out' : ''}">${r.rec ? fmtPct(m) : '—'}</td><td class="num">${money(r.cin - r.cout, { sign: true })}</td></tr>`; }).join('')}
+      <td class="num out">${money(r.cost)}</td><td class="num" style="font-weight:600">${money(r.contrib)}</td><td class="num ${m < 50 ? 'out' : ''}">${r.rec ? fmtPct(m) : '—'}</td><td class="num">${money(r.cin - r.cout, { sign: true })}</td></tr>`;
+    }).join('')}
     </tbody><tfoot><tr><td colspan="4">Total · ${rows.length} projects</td><td class="num">${money(sum(rows, r => r.p.contractValue || 0))}</td><td class="num in">${money(T('rec'))}</td><td></td><td class="num out">${money(T('cost'))}</td><td class="num">${money(T('contrib'))}</td><td class="num">${fmtPct(pct(T('contrib'), T('rec')))}</td><td class="num">${money(T('cin') - T('cout'), { sign: true })}</td></tr></tfoot></table></div></div>`;
   },
   departments() {
@@ -3240,8 +3633,10 @@ const REPORTS = {
     const scope = 'rd:';
     const build = type => {
       const agg = aggregate(ents.filter(e => e.type === type), periods, e => e.departmentId + '|' + e.categoryId);
-      const nodes = finishTree(api.list('departments').map(d => ({ key: scope + type + ':' + d.id, label: d.name, drill: { departmentId: d.id },
-        children: categoryTree(type, c => agg[d.id + '|' + c.id] || periods.map(() => 0), scope + type + ':' + d.id + ':', { departmentId: d.id }) })), len);
+      const nodes = finishTree(api.list('departments').map(d => ({
+        key: scope + type + ':' + d.id, label: d.name, drill: { departmentId: d.id },
+        children: categoryTree(type, c => agg[d.id + '|' + c.id] || periods.map(() => 0), scope + type + ':' + d.id + ':', { departmentId: d.id })
+      })), len);
       nodes.sort((a, b) => sum(b.vals) - sum(a.vals)); return nodes;
     };
     const tOut = build('outflow'), tIn = build('inflow');
@@ -3374,10 +3769,12 @@ PAGES.recurring = {
       ${pend.length ? `<div class="due-head"><span class="grow">Item</span><span class="due-when"></span><span class="due-amt">Amount (pre-GST)</span><span class="due-net">Net cash</span><span class="due-acts"></span></div>` : ''}${pend.map(p => dueRow(p, { inline: true })).join('') || '<div class="empty"><b>All caught up</b>No recurring items due in the next 30 days.</div>'}</div>
     <div class="card"><div class="card-h"><div class="grow"><h3>Templates</h3><div class="sub">${tpls.filter(t => t.active).length} active · ${tpls.filter(t => !t.active).length} paused</div></div><button class="btn btn-navy btn-sm" data-act="new-template">${icon('plus')} New template</button></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Name</th><th>Type</th><th>Category · department</th><th>Party</th><th class="num">Net per cycle</th><th>Schedule</th><th>Next due</th><th>Status</th><th></th></tr></thead><tbody>
-    ${tpls.map(r => { const n = nextDue(r); return `<tr><td class="cell-main">${esc(r.name)}</td><td>${typeChip(r.type)}</td><td><div>${esc(nameOf('categories', r.categoryId))}</div><div class="cell-sub">${esc(nameOf('departments', r.departmentId))}</div></td><td>${esc(nameOf('parties', r.partyId))}</td>
+    ${tpls.map(r => {
+      const n = nextDue(r); return `<tr><td class="cell-main">${esc(r.name)}</td><td>${typeChip(r.type)}</td><td><div>${esc(nameOf('categories', r.categoryId))}</div><div class="cell-sub">${esc(nameOf('departments', r.departmentId))}</div></td><td>${esc(nameOf('parties', r.partyId))}</td>
       <td class="num ${r.type === 'inflow' ? 'in' : 'out'}">${r.variable ? (() => { const sg = recurringSuggest(r); return `<span title="Last recorded amount">${money(recurringNet(r, sg.suggested))}</span><div class="cell-sub">varies · avg ${money(recurringNet(r, sg.forecast))}</div>`; })() : money(recurringNet(r))}</td><td class="nowrap">${FREQ[r.frequency]} · day ${r.dayOfMonth}${r.endDate ? `<div class="cell-sub">until ${fmtDate(r.endDate)}</div>` : ''}</td>
       <td class="nowrap">${r.active && n ? fmtDate(n.dueDate) + (n.dueDate < TODAY ? ' <span class="chip overdue">overdue</span>' : '') : '—'}</td><td><span class="chip ${r.active ? 'inflow' : ''}">${r.active ? 'Active' : 'Paused'}</span></td>
-      <td class="nowrap"><button class="icon-btn" title="Edit" data-act="edit-template" data-id="${r.id}">${icon('edit')}</button><button class="icon-btn" title="${r.active ? 'Pause' : 'Resume'}" data-act="toggle-template" data-id="${r.id}">${icon(r.active ? 'pause' : 'play')}</button>${api.can('recurring.delete') ? `<button class="icon-btn" title="Delete" data-act="del-template" data-id="${r.id}">${icon('trash')}</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan="9"><div class="empty">No templates yet.</div></td></tr>'}
+      <td class="nowrap"><button class="icon-btn" title="Edit" data-act="edit-template" data-id="${r.id}">${icon('edit')}</button><button class="icon-btn" title="${r.active ? 'Pause' : 'Resume'}" data-act="toggle-template" data-id="${r.id}">${icon(r.active ? 'pause' : 'play')}</button>${api.can('recurring.delete') ? `<button class="icon-btn" title="Delete" data-act="del-template" data-id="${r.id}">${icon('trash')}</button>` : ''}</td></tr>`;
+    }).join('') || '<tr><td colspan="9"><div class="empty">No templates yet.</div></td></tr>'}
     </tbody></table></div></div></div>`;
   },
 };
@@ -3401,49 +3798,60 @@ function masterDef(tab) {
     ] : [['Name', p => `<div class="cell-main">${esc(p.name)}</div>${p.email ? `<div class="cell-sub">${esc(p.email)}</div>` : ''}`], ...(tab === 'employee' ? [['Department', p => esc(nameOf('departments', p.departmentId))], ['Designation', p => esc(p.designation || '—')], ['Salary', p => `<span class="num">${p.monthlySalary ? money(p.monthlySalary) : '—'}</span>`]] : [['GSTIN', p => `<span class="mono" style="font-size:12px">${esc(p.gstin || '—')}</span>`], ['GST', p => esc(GST_TYPES[p.gstType] || '—')]])],
   };
   return {
-    projects: { col: 'projects', filter: () => true, perm: 'project', usage: p => Calc.live().filter(e => e.projectId === p.id),
+    projects: {
+      col: 'projects', filter: () => true, perm: 'project', usage: p => Calc.live().filter(e => e.projectId === p.id),
       fields: [['code', 'Project code *', 'text', { req: 1 }], ['name', 'Project name *', 'text', { req: 1 }], ['clientId', 'Client *', 'select', { req: 1, options: () => api.list('parties').filter(p => p.kind === 'client').map(p => [p.id, p.name]) }], ['departmentId', 'Department *', 'select', { req: 1, options: () => api.list('departments').map(d => [d.id, d.name]) }], ['contractValue', 'Contract value (₹, pre-GST)', 'number', { hint: () => 'Used only when the project has no orders; otherwise the sum of its orders is used.' }], ['startDate', 'Start date', 'date'], ['status', 'Status', 'select', { options: () => [['active', 'Active'], ['on-hold', 'On hold'], ['completed', 'Completed']] }]],
       defaults: { status: 'active' },
-      cols: [['Project', p => `<div class="cell-main">${esc(p.code)}</div><div class="cell-sub">${esc(p.name)}</div>`], ['Client', p => esc(nameOf('parties', p.clientId))], ['Department', p => esc(nameOf('departments', p.departmentId))], ['Contract', p => { const v = Sales.projectContract(p.id); return `<span class="num">${v ? money(v) : '—'}</span>`; }], ['Status', p => `<span class="chip ${p.status === 'active' ? 'gold' : ''}">${esc(p.status)}</span>`]] },
+      cols: [['Project', p => `<div class="cell-main">${esc(p.code)}</div><div class="cell-sub">${esc(p.name)}</div>`], ['Client', p => esc(nameOf('parties', p.clientId))], ['Department', p => esc(nameOf('departments', p.departmentId))], ['Contract', p => { const v = Sales.projectContract(p.id); return `<span class="num">${v ? money(v) : '—'}</span>`; }], ['Status', p => `<span class="chip ${p.status === 'active' ? 'gold' : ''}">${esc(p.status)}</span>`]]
+    },
     departments: { col: 'departments', filter: () => true, perm: 'department', usage: d => Calc.live().filter(e => e.departmentId === d.id), fields: [['name', 'Department name *', 'text', { req: 1, span: 2 }], ['managerName', 'Manager', 'text', { hint: () => 'Gets a scorecard login (prototype)' }], ['managerEmail', 'Manager email', 'text']], defaults: {}, cols: [['Department', d => `<span class="cell-main">${esc(d.name)}</span>`], ['Manager', d => esc(d.managerName || '—') + (d.managerEmail ? `<div class="cell-sub">${esc(d.managerEmail)}</div>` : '')]] },
-    categories: { col: 'categories', filter: () => true, perm: 'category', usage: c => Calc.live().filter(e => e.categoryId === c.id),
+    categories: {
+      col: 'categories', filter: () => true, perm: 'category', usage: c => Calc.live().filter(e => e.categoryId === c.id),
       fields: [
         ['name', 'Category name *', 'text', { req: 1, span: 2 }],
         ['type', 'Type *', 'select', { req: 1, lockOnEdit: 1, options: () => [['outflow', 'Outflow'], ['inflow', 'Inflow']] }],
-        ['bucket', 'Summary bucket', 'select', { options: () => {
-          const live = (typeof window !== 'undefined' && (window as any).__categorySummaryBucketList);
-          if (live && live.length) return live.map((b: any) => [b.name, b.name]);
-          return [
-            ['Operating costs (outflow)', 'Operating costs (outflow)'],
-            ['Project costs (outflow)', 'Project costs (outflow)'],
-            ['Tax & statutory (outflow)', 'Tax & statutory (outflow)'],
-            ['Capex (outflow)', 'Capex (outflow)'],
-            ['Financing & owner (outflow)', 'Financing & owner (outflow)'],
-            ['Operating receipts (inflow)', 'Operating receipts (inflow)'],
-            ['Other income (inflow)', 'Other income (inflow)'],
-            ['Financing (inflow)', 'Financing (inflow)']
-          ];
-        }, hint: () => 'Top level in summary views. Leave blank to derive from group & nature.' }],
-        ['group', 'Group *', 'select', { req: 1, options: () => {
-          const defaults = ['People', 'Office – Fixed', 'Office – Variable', 'Travel', 'Project Costs', 'Professional & Admin', 'Capex / Purchases', 'Statutory & Tax', 'Financing & Owner', 'Operating Receipts', 'Other Income', 'Financing'];
-          const live = (typeof window !== 'undefined' && (window as any).__categoryGroupList) || [];
-          const existing = api.list('categories').map(c => c.group).filter(Boolean);
-          const all = Array.from(new Set([...defaults, ...live, ...existing]));
-          return all.map(g => [g, g]);
-        } }],
-        ['partyKind', 'Usually linked to', 'select', { options: () => {
-          const live = (typeof window !== 'undefined' && (window as any).__categoryLinkedToList);
-          if (live && live.length) return live.map((l: any) => [l.name.toLowerCase(), l.name]);
-          return [['client', 'Client'], ['vendor', 'Vendor'], ['employee', 'Employee'], ['other', 'Other']];
-        } }],
-        ['kind', 'Nature', 'select', { options: () => {
-          const live = (typeof window !== 'undefined' && (window as any).__categoryNatureList);
-          if (live && live.length) return live.map((n: any) => {
-            const val = { 'Operating': 'operating', 'Statutory / Tax': 'tax', 'Capex': 'capex', 'Financing / Owner': 'financing' }[n.name] || n.name.toLowerCase();
-            return [val, n.name];
-          });
-          return [['operating', 'Operating'], ['tax', 'Statutory / Tax'], ['capex', 'Capex'], ['financing', 'Financing / Owner']];
-        } }],
+        ['bucket', 'Summary bucket', 'select', {
+          options: () => {
+            const live = (typeof window !== 'undefined' && (window as any).__categorySummaryBucketList);
+            if (live && live.length) return live.map((b: any) => [b.name, b.name]);
+            return [
+              ['Operating costs (outflow)', 'Operating costs (outflow)'],
+              ['Project costs (outflow)', 'Project costs (outflow)'],
+              ['Tax & statutory (outflow)', 'Tax & statutory (outflow)'],
+              ['Capex (outflow)', 'Capex (outflow)'],
+              ['Financing & owner (outflow)', 'Financing & owner (outflow)'],
+              ['Operating receipts (inflow)', 'Operating receipts (inflow)'],
+              ['Other income (inflow)', 'Other income (inflow)'],
+              ['Financing (inflow)', 'Financing (inflow)']
+            ];
+          }, hint: () => 'Top level in summary views. Leave blank to derive from group & nature.'
+        }],
+        ['group', 'Group *', 'select', {
+          req: 1, options: () => {
+            const defaults = ['People', 'Office – Fixed', 'Office – Variable', 'Travel', 'Project Costs', 'Professional & Admin', 'Capex / Purchases', 'Statutory & Tax', 'Financing & Owner', 'Operating Receipts', 'Other Income', 'Financing'];
+            const live = (typeof window !== 'undefined' && (window as any).__categoryGroupList) || [];
+            const existing = api.list('categories').map(c => c.group).filter(Boolean);
+            const all = Array.from(new Set([...defaults, ...live, ...existing]));
+            return all.map(g => [g, g]);
+          }
+        }],
+        ['partyKind', 'Usually linked to', 'select', {
+          options: () => {
+            const live = (typeof window !== 'undefined' && (window as any).__categoryLinkedToList);
+            if (live && live.length) return live.map((l: any) => [l.name.toLowerCase(), l.name]);
+            return [['client', 'Client'], ['vendor', 'Vendor'], ['employee', 'Employee'], ['other', 'Other']];
+          }
+        }],
+        ['kind', 'Nature', 'select', {
+          options: () => {
+            const live = (typeof window !== 'undefined' && (window as any).__categoryNatureList);
+            if (live && live.length) return live.map((n: any) => {
+              const val = { 'Operating': 'operating', 'Statutory / Tax': 'tax', 'Capex': 'capex', 'Financing / Owner': 'financing' }[n.name] || n.name.toLowerCase();
+              return [val, n.name];
+            });
+            return [['operating', 'Operating'], ['tax', 'Statutory / Tax'], ['capex', 'Capex'], ['financing', 'Financing / Owner']];
+          }
+        }],
         ['sac', 'SAC code', 'text', { hint: () => 'For receipts: printed in the GST sales register. Confirm codes with your CA.' }],
         ['itcBlocked', 'Input GST on bills', 'select', {
           options: () => {
@@ -3463,18 +3871,23 @@ function masterDef(tab) {
             return blocked?.description || 'Blocked: food, gifts, personal use, motor vehicles (Sec. 17(5))';
           }
         }],
-        ['tdsSection', 'TDS section (payments)', 'select', { options: () => {
-          const live = (typeof window !== 'undefined' && (window as any).__categoryTdsSectionList);
-          if (live && live.length) return live.map((s: any) => [s.code, `${s.code} · ${s.description || s.code}`]);
-          return [['192', '192 · Salary'], ['194C', '194C · Contractors'], ['194J', '194J · Professional / technical fees'], ['194I', '194I · Rent'], ['194H', '194H · Commission / brokerage'], ['194A', '194A · Interest (other than bank)']];
-        }, hint: () => 'Suggested on payments in this category; changeable per entry' }]
+        ['tdsSection', 'TDS section (payments)', 'select', {
+          options: () => {
+            const live = (typeof window !== 'undefined' && (window as any).__categoryTdsSectionList);
+            if (live && live.length) return live.map((s: any) => [s.code, `${s.code} · ${s.description || s.code}`]);
+            return [['192', '192 · Salary'], ['194C', '194C · Contractors'], ['194J', '194J · Professional / technical fees'], ['194I', '194I · Rent'], ['194H', '194H · Commission / brokerage'], ['194A', '194A · Interest (other than bank)']];
+          }, hint: () => 'Suggested on payments in this category; changeable per entry'
+        }]
       ],
       defaults: { type: 'outflow', partyKind: 'vendor', kind: 'operating' },
-      cols: [['Category', c => `<div class="cell-main">${esc(c.name)}</div><div class="cell-sub">${esc(BUCKET_LABEL[bucketOf(c)])} › ${esc(c.group)}</div>`], ['Type', c => typeChip(c.type)], ['Linked to', c => esc(PARTY_KINDS_SHORT[c.partyKind] || '—')], ['Nature', c => esc(CAT_KINDS[c.kind] || '—')], ['TDS', c => c.tdsSection ? `<span class="mono" style="font-size:12px">${esc(c.tdsSection)}</span>` : '<span class="faint">—</span>'], ['GST', c => c.type === 'inflow' ? (c.sac ? `<span class="mono" style="font-size:12px">SAC ${esc(c.sac)}</span>` : '<span class="faint">—</span>') : c.itcBlocked ? '<span class="chip overdue">ITC blocked</span>' : '<span class="faint">ITC</span>']] },
-    accounts: { col: 'accounts', filter: () => true, perm: 'account', usage: a => Calc.live().filter(e => e.accountId === a.id || e.toAccountId === a.id),
+      cols: [['Category', c => `<div class="cell-main">${esc(c.name)}</div><div class="cell-sub">${esc(BUCKET_LABEL[bucketOf(c)])} › ${esc(c.group)}</div>`], ['Type', c => typeChip(c.type)], ['Linked to', c => esc(PARTY_KINDS_SHORT[c.partyKind] || '—')], ['Nature', c => esc(CAT_KINDS[c.kind] || '—')], ['TDS', c => c.tdsSection ? `<span class="mono" style="font-size:12px">${esc(c.tdsSection)}</span>` : '<span class="faint">—</span>'], ['GST', c => c.type === 'inflow' ? (c.sac ? `<span class="mono" style="font-size:12px">SAC ${esc(c.sac)}</span>` : '<span class="faint">—</span>') : c.itcBlocked ? '<span class="chip overdue">ITC blocked</span>' : '<span class="faint">ITC</span>']]
+    },
+    accounts: {
+      col: 'accounts', filter: () => true, perm: 'account', usage: a => Calc.live().filter(e => e.accountId === a.id || e.toAccountId === a.id),
       fields: [['name', 'Account name *', 'text', { req: 1, span: 2 }], ['type', 'Type', 'select', { options: () => Object.entries(ACCOUNT_TYPES) }], ['number', 'Account no. (masked)', 'text'], ['openingBalance', 'Opening balance (₹)', 'number', { hint: () => 'As of ' + fmtDate(Store.data.settings.openingDate) }]],
       defaults: { type: 'bank', openingBalance: 0 },
-      cols: [['Account', a => `<div class="cell-main">${esc(a.name)}</div><div class="cell-sub">${esc(a.number || '')}</div>`], ['Type', a => esc(ACCOUNT_TYPES[a.type])], ['Opening', a => `<span class="num">${money(a.openingBalance)}</span>`], ['Balance today', a => `<b class="num">${money(Calc.balance(a.id, TODAY))}</b>`]] },
+      cols: [['Account', a => `<div class="cell-main">${esc(a.name)}</div><div class="cell-sub">${esc(a.number || '')}</div>`], ['Type', a => esc(ACCOUNT_TYPES[a.type])], ['Opening', a => `<span class="num">${money(a.openingBalance)}</span>`], ['Balance today', a => `<b class="num">${money(Calc.balance(a.id, TODAY))}</b>`]]
+    },
   }[tab];
 }
 const permKey = (perm, act) => ['party', 'project'].includes(perm) ? perm + '.' + act : perm + '.edit';
@@ -4004,8 +4417,8 @@ async function resetToTestData() {
   const { data, attachments } = buildSeed();
   const me = Store.data && Store.data.settings ? Store.data.settings.currentUserId : 'u_owner';
   Store.data = data; Store.data.settings.currentUserId = me || 'u_owner'; Store.persist();
-  await FileStore.clear().catch(() => {});
-  for (const a of attachments) await FileStore.put({ ...a.meta, blob: new Blob([a.svg], { type: 'image/svg+xml' }) }).catch(() => {});
+  await FileStore.clear().catch(() => { });
+  for (const a of attachments) await FileStore.put({ ...a.meta, blob: new Blob([a.svg], { type: 'image/svg+xml' }) }).catch(() => { });
   S.fy = fyOf(TODAY);
 }
 
@@ -4018,20 +4431,22 @@ function bindGlobal() {
     const opTd = ev.target?.closest?.('td.op-cell');
     const finTd = ev.target?.closest?.('td.fin-cell');
     const incTd = ev.target?.closest?.('td.inc-cell');
-    const td = opTd || finTd || incTd;
+    const peopleTd = ev.target?.closest?.('td.people-cell');
+    const td = opTd || finTd || incTd || peopleTd;
     if (!td || td.querySelector('input')) return;
     ev.preventDefault();
     ev.stopPropagation();
 
     const isFin = !!finTd;
     const isInc = !!incTd;
-    const rowId = isFin ? td.dataset.finId : isInc ? td.dataset.incId : td.dataset.opId;
-    const col = isFin ? td.dataset.finCol : isInc ? td.dataset.incCol : td.dataset.opCol;
-    const rowName = isFin ? (td.dataset.finName || 'Financing') : isInc ? (td.dataset.incName || 'Income') : (td.dataset.opName || 'Receipt');
-    const initialVal = isFin ? (td.dataset.finVal || '0') : isInc ? (td.dataset.incVal || '0') : (td.dataset.opVal || '0');
+    const isPeople = !!peopleTd;
+    const rowId = isPeople ? td.dataset.peopleId : isFin ? td.dataset.finId : isInc ? td.dataset.incId : td.dataset.opId;
+    const col = isPeople ? td.dataset.peopleCol : isFin ? td.dataset.finCol : isInc ? td.dataset.incCol : td.dataset.opCol;
+    const rowName = isPeople ? (td.dataset.peopleName || 'People Expense') : isFin ? (td.dataset.finName || 'Financing') : isInc ? (td.dataset.incName || 'Income') : (td.dataset.opName || 'Receipt');
+    const initialVal = isPeople ? (td.dataset.peopleVal || '0') : isFin ? (td.dataset.finVal || '0') : isInc ? (td.dataset.incVal || '0') : (td.dataset.opVal || '0');
     const origHTML = td.innerHTML;
 
-    td.innerHTML = `<input type="number" step="any" class="${isFin ? 'fin-inline-input' : isInc ? 'inc-inline-input' : 'op-inline-input'}" value="${Number(initialVal) || ''}" placeholder="0" style="width:100%;min-width:70px;text-align:right;background:var(--surface);border:1px solid var(--accent, #1E7A4F);color:var(--ink);border-radius:4px;padding:2px 4px;font-family:inherit;font-size:inherit;font-weight:600;outline:none;box-sizing:border-box;" />`;
+    td.innerHTML = `<input type="number" step="any" class="${isPeople ? 'people-inline-input' : isFin ? 'fin-inline-input' : isInc ? 'inc-inline-input' : 'op-inline-input'}" value="${Number(initialVal) || ''}" placeholder="0" style="width:100%;min-width:70px;text-align:right;background:var(--surface);border:1px solid var(--accent, #1E7A4F);color:var(--ink);border-radius:4px;padding:2px 4px;font-family:inherit;font-size:inherit;font-weight:600;outline:none;box-sizing:border-box;" />`;
     const inp = td.querySelector('input');
     if (!inp) return;
     inp.focus();
@@ -4054,13 +4469,16 @@ function bindGlobal() {
 
       td.innerHTML = `<span style="opacity:0.6">${money(newVal)}</span>`;
       try {
-        if (isFin && typeof (window as any).__updateFinancingCell === 'function') {
+        if (isPeople && typeof (window as any).__updatePeopleCell === 'function') {
+          await (window as any).__updatePeopleCell(rowId, col, newVal);
+          toast(`Updated ${rowName}`);
+        } else if (isFin && typeof (window as any).__updateFinancingCell === 'function') {
           await (window as any).__updateFinancingCell(rowId, col, newVal);
           toast(`Updated ${rowName}`);
         } else if (isInc && typeof (window as any).__updateIncomeCell === 'function') {
           await (window as any).__updateIncomeCell(rowId, col, newVal);
           toast(`Updated ${rowName}`);
-        } else if (!isFin && !isInc && typeof (window as any).__updateOperationReceiptCell === 'function') {
+        } else if (!isFin && !isInc && !isPeople && typeof (window as any).__updateOperationReceiptCell === 'function') {
           await (window as any).__updateOperationReceiptCell(rowId, col, newVal);
           toast(`Updated ${rowName}`);
         } else {
@@ -4277,7 +4695,7 @@ PAGES.sales = {
     const detBtn = editT ? '' : `<button class="btn btn-sm ${detail ? 'on' : ''}" data-act="sb-detail">${icon('chev').replace('<svg', `<svg style="width:13px;height:13px;transform:rotate(${detail ? 90 : 0}deg)"`)} ${detail ? 'Hide' : 'Show'} ${showT ? 'targets & %' : '% share'}</button>`;
     const headBtns = detBtn + (!showT ? ''
       : editT ? `<button class="btn btn-sm" data-act="st-cancel">Cancel</button><button class="btn btn-sm btn-navy" data-act="st-save">${icon('check')} Save targets</button>`
-      : canT ? `<button class="btn btn-sm" data-act="st-edit">${icon('edit')} Edit targets</button>` : '');
+        : canT ? `<button class="btn btn-sm" data-act="st-edit">${icon('edit')} Edit targets</button>` : '');
     const table = `<div class="card"><div class="card-h"><div class="grow"><h3>By department & client${showT ? ' · vs target' : ''}</h3><div class="sub">${editT ? `Editing monthly targets for ${esc(fyLabel(S.fy))} (all 12 months shown). Values are pre-GST revenue on PIs issued.` : 'Department credit follows each order\'s split' + (detail ? ` · ${shareLbl} shaded darker for stronger periods` + (showT ? ', target and achievement under each department' : '') : (showT ? ' · company achievement shown; open “Show targets & %” for department detail' : ''))}</div></div>
         ${editT ? '' : `<div class="seg">${Object.entries(METRICS).map(([k, l]) => `<button class="${P.metric === k ? 'on' : ''}" data-act="sales-set" data-k="metric" data-v="${k}">${l}</button>`).join('')}</div>${levelSeg(scope, nodes, [['summary', 'Departments'], ['all', 'Clients']])}`}${headBtns}</div>
       <div class="tbl-wrap"><table class="tbl sticky-first cf st-tbl rp"><thead><tr><th class="first">${esc(METRICS[P.metric])}</th>${tp.map(p => `<th class="num ${p.cur ? 'cur' : ''}">${esc(p.label)}</th>`).join('')}<th class="num tot-c">${editT ? 'FY total' : 'Total'}</th></tr></thead><tbody>
@@ -4423,7 +4841,7 @@ function attachBlock(v, F) {
 async function storeFiles(F, v) {
   const metas = [];
   for (const fl of F.newFiles) { const id = uid('f'); const meta = { id, name: fl.name, type: fl.type, size: fl.size }; await FileStore.put({ ...meta, blob: fl }); metas.push(meta); }
-  for (const id of F.removed) await FileStore.del(id).catch(() => {});
+  for (const id of F.removed) await FileStore.del(id).catch(() => { });
   return [...(v.attachments || []), ...metas];
 }
 /** Generic modal form runner: state v, render fn, handlers. */
@@ -4487,11 +4905,13 @@ function openOrderForm(id, preset = {}) {
   };
   const termRows = () => {
     const T = total(), n = v.terms.length;
-    return v.terms.map((t, i) => { const last = i === n - 1, amt = r2(T * (+t.pct || 0) / 100);
+    return v.terms.map((t, i) => {
+      const last = i === n - 1, amt = r2(T * (+t.pct || 0) / 100);
       return `<div class="od-row term ${last ? 'bal' : ''}"><input class="input" data-x="terms.${i}.label" value="${esc(t.label)}" placeholder="Milestone">
       ${last ? `<div class="od-bal num" data-tamt="${i}">${money(amt)}</div><div class="od-bal num" data-tpct="${i}">${fmtPct(+t.pct || 0)}</div><span class="od-tag">${n > 1 ? 'balance' : 'full'}</span>`
-        : `<div class="ef-money"><span>₹</span><input class="input num" data-num data-x="terms.${i}.amt" data-tamt="${i}" value="${T > 0 && t.pct !== '' ? amt : ''}" type="number" min="0" step="0.01" inputmode="decimal"></div><div class="od-pct"><input class="input num" data-num data-x="terms.${i}.pct" data-tpct="${i}" value="${t.pct === '' ? '' : Math.round(t.pct * 100) / 100}" type="number" min="0" max="100" step="0.01"><span>%</span></div>
-        <button type="button" class="icon-btn" data-x-act="rm-term" data-i="${i}" title="Remove">${icon('x')}</button>`}</div>`; }).join('');
+          : `<div class="ef-money"><span>₹</span><input class="input num" data-num data-x="terms.${i}.amt" data-tamt="${i}" value="${T > 0 && t.pct !== '' ? amt : ''}" type="number" min="0" step="0.01" inputmode="decimal"></div><div class="od-pct"><input class="input num" data-num data-x="terms.${i}.pct" data-tpct="${i}" value="${t.pct === '' ? '' : Math.round(t.pct * 100) / 100}" type="number" min="0" max="100" step="0.01"><span>%</span></div>
+        <button type="button" class="icon-btn" data-x-act="rm-term" data-i="${i}" title="Remove">${icon('x')}</button>`}</div>`;
+    }).join('');
   };
   const bodyFn = () => {
     const valueChanged = old && Math.abs(old.taxable - v.taxable) > 0.004;
@@ -4536,7 +4956,8 @@ function openOrderForm(id, preset = {}) {
     const te = $('#odTermErr'); if (te) te.textContent = (v.terms[v.terms.length - 1] || {}).pct < -0.001 ? 'Milestones add up to more than the order value' : '';
     if (old) { const changed = Math.abs(old.taxable - v.taxable) > 0.004, r = $('#odReason'); if (r && changed !== !!$('[data-x=reason]', r)) r.innerHTML = changed ? xf(F, 'reason', 'Reason for value change *', `<input class="input" data-x="reason" value="${esc(F.reason)}" placeholder="e.g. Scope extended – second variant">`, '', 'Saved as an amendment: ' + money(old.taxable) + ' → ' + money(v.taxable)) : ''; else if (r && changed) { const h = $('.hint', r); if (h) h.textContent = 'Saved as an amendment: ' + money(old.taxable) + ' → ' + money(v.taxable); } }
   };
-  runForm({ title: old ? 'Edit order ' + esc(old.orderNo) : 'New order', wide: true, v, F, bodyFn,
+  runForm({
+    title: old ? 'Edit order ' + esc(old.orderNo) : 'New order', wide: true, v, F, bodyFn,
     onField(k, val, el, isLive) {
       if (k.startsWith('np.')) { F.np[k.slice(3)] = val; return false; }
       if (k === 'reason') { F.reason = val; return false; }
@@ -4544,9 +4965,11 @@ function openOrderForm(id, preset = {}) {
       let m = k.match(/^split\.(\d+)\.(\w+)$/);
       if (m) { v.split[+m[1]][m[2]] = val; if (isLive) { live(); return false; } sync(); return; }
       m = k.match(/^terms\.(\d+)\.(\w+)$/);
-      if (m) { const t = v.terms[+m[1]], T = total();
+      if (m) {
+        const t = v.terms[+m[1]], T = total();
         if (m[2] === 'amt') { t.mode = 'amt'; t.amt = val; t.pct = val === '' ? '' : (T > 0 ? val / T * 100 : 0); } else { t[m[2]] = val; if (m[2] === 'pct') t.mode = 'pct'; }
-        if (isLive) { live(); return false; } sync(); return false; }
+        if (isLive) { live(); return false; } sync(); return false;
+      }
       v[k] = val;
       if (k === 'clientId') { const c = api.get('parties', val); if (c) { v.gstType = c.gstType !== 'none' ? c.gstType : 'intra'; const pr = api.get('projects', v.projectId); if (pr && pr.clientId !== val) v.projectId = ''; const pc = partyContacts(c).find(x => x.name && (x.tags || []).includes('projects')) || partyContacts(c).find(x => x.name); if (!old || !v.contact) { v.contact = pc ? contactLabel(pc) : ''; v.contactId = pc ? pc.id : ''; } F.contactFree = false; } }
       if (k === 'projectId') { const pr = api.get('projects', val); if (pr && !v.split[0].departmentId) v.split[0].departmentId = pr.departmentId; }
@@ -4574,7 +4997,7 @@ function openOrderForm(id, preset = {}) {
       if (v.split.some(s => s.departmentId && !(+s.amount > 0))) { const e = new Error('Enter an amount for each department, or remove the empty row'); e.fields = { split: e.message }; throw e; }
       if ((v.terms[v.terms.length - 1] || {}).pct < -0.001) { const e = new Error('Payment milestones add up to more than the order value'); e.fields = { terms: e.message }; throw e; }
       v.attachments = await storeFiles(F, v); F.newFiles = []; F.removed = [];
-      const input = { ...v }; ['id', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'deleted', 'amendments', 'status', 'total'].forEach(k => delete input[k]);
+      const input = { ...v };['id', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'deleted', 'amendments', 'status', 'total'].forEach(k => delete input[k]);
       input.split = v.split.map(s => ({ departmentId: s.departmentId, amount: +s.amount || 0 }));
       input.terms = v.terms.map(t => ({ label: t.label, pct: +t.pct || 0 }));
       const r = await api.saveOrder(input, id, F.reason, F.newProj ? { code: F.np.code.trim(), name: F.np.name.trim() } : null);
@@ -4590,7 +5013,7 @@ function openPIForm(id, orderId) {
   const F = { errs: {}, newFiles: [], removed: [], gstAuto: !old, tdsAuto: !old, ms: '', autoNo: !old };
   const applyOrder = () => { const o = api.get('orders', v.orderId); if (!o) return; v.gstRate = o.gstRate; v.gstType = o.gstType; const st = Sales.orderState(o); const next = (o.terms || []).findIndex(t => !st.pis.some(x => (x.pi.milestone || '').startsWith(t.label))); if (next >= 0 && !old) pickMs(next); };
   const pickMs = i => { const o = api.get('orders', v.orderId); const t = o && o.terms[i]; if (!t) return; F.ms = String(i); v.milestone = `${t.label} (${+(+t.pct).toFixed(2)}%)`; v.taxable = r2(o.taxable * t.pct / 100); F.gstAuto = F.tdsAuto = true; recalc(); };
-  const recalc = () => { const t = +v.taxable || 0; if (F.gstAuto) v.gstAmount = r2(t * (+v.gstRate || 0) / 100); if (F.tdsAuto) v.tdsAmount = r2(t * (+v.tdsRate || 0) / 100); const box = $('#xTot'); if (box) box.innerHTML = totals(); ['gstAmount', 'tdsAmount'].forEach(k => { const i = $(`[data-x=${k}]`); if (i && document.activeElement !== i) i.value = v[k] || ''; }); };
+  const recalc = () => { const t = +v.taxable || 0; if (F.gstAuto) v.gstAmount = r2(t * (+v.gstRate || 0) / 100); if (F.tdsAuto) v.tdsAmount = r2(t * (+v.tdsRate || 0) / 100); const box = $('#xTot'); if (box) box.innerHTML = totals();['gstAmount', 'tdsAmount'].forEach(k => { const i = $(`[data-x=${k}]`); if (i && document.activeElement !== i) i.value = v[k] || ''; }); };
   const totals = () => { const t = +v.taxable || 0, g = +v.gstAmount || 0, d = +v.tdsAmount || 0; return `<div class="net-box"><div><div class="l">PI total incl. GST</div><div class="calc">${money(t)} + GST ${money(g)} · expected net after TDS ${money(t + g - d)}</div></div><div class="v">${money(t + g)}</div></div>`; };
   const creditDays = () => { const o = api.get('orders', v.orderId); const c = o && api.get('parties', o.clientId); return c && c.creditDays != null && c.creditDays !== '' ? +c.creditDays : 30; };
   if (!old) v.dueDate = addDays(v.date, creditDays());
@@ -4616,7 +5039,8 @@ function openPIForm(id, orderId) {
     </div><div id="xTot">${totals()}</div></div>
     <div class="fsec"><div class="fsec-h">Other</div><div class="fgrid c2">${xf(F, 'taxInvoiceNo', 'Tax invoice no.', xi(v, 'taxInvoiceNo', 'placeholder="Once converted"'))}${xf(F, 'notes', 'Notes', xi(v, 'notes'))}<div class="span3">${attachBlock(v, F)}</div></div></div>${F.email ? emailBoxHTML(F.email, { docs: (v.attachments || []).length + F.newFiles.length }) : ''}`;
   };
-  const piOv = runForm({ title: old ? 'Edit PI' : 'New proforma invoice', wide: true, v, F, bodyFn,
+  const piOv = runForm({
+    title: old ? 'Edit PI' : 'New proforma invoice', wide: true, v, F, bodyFn,
     onField(k, val, el, live) {
       if (k === 'ms') { if (val === '') F.ms = ''; else pickMs(+val); return; }
       v[k] = val;
@@ -4630,7 +5054,7 @@ function openPIForm(id, orderId) {
       if (k === 'taxable') F.ms = F.ms;
       recalc(); if (live) return false;
     },
-    async save() { checkEmail(F.email); v.attachments = await storeFiles(F, v); F.newFiles = []; F.removed = []; const input = { ...v }; ['id', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'deleted', 'status', 'total', 'clientId', 'projectId'].forEach(k => delete input[k]); const r = await api.savePI(input, id); const mail = await finalizeEmail(F.email, { entity: 'pis', entityId: r.id, docs: r.attachments || [] }).catch(err => { toast('PI saved, but the email was not queued: ' + err.message, 'error'); return null; }); toast((old ? 'PI updated' : 'PI ' + r.piNo + ' issued') + (mail ? ' · emailed to ' + mail.to.join(', ') + ' (queued)' : '')); },
+    async save() { checkEmail(F.email); v.attachments = await storeFiles(F, v); F.newFiles = []; F.removed = []; const input = { ...v };['id', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'deleted', 'status', 'total', 'clientId', 'projectId'].forEach(k => delete input[k]); const r = await api.savePI(input, id); const mail = await finalizeEmail(F.email, { entity: 'pis', entityId: r.id, docs: r.attachments || [] }).catch(err => { toast('PI saved, but the email was not queued: ' + err.message, 'error'); return null; }); toast((old ? 'PI updated' : 'PI ' + r.piNo + ' issued') + (mail ? ' · emailed to ' + mail.to.join(', ') + ' (queued)' : '')); },
   });
   bindEmailEvents($('#xBody', piOv), () => F.email, F.redraw);
 }
@@ -4754,2465 +5178,5 @@ Object.assign(ACT, {
   },
   'pi-receipt': el => {
     const p = api.get('pis', el.dataset.id), st = Sales.piState(p), o = Sales.orderOfPI(p), pr = api.get('projects', p.projectId);
-    const cat = pr && /^RET/.test(pr.code) ? 'cat_retain' : o && o.type === 'Email' ? 'cat_consult' : o && o.departmentId === 'dep_eng' ? 'cat_reng' : 'cat_rdesign';
-    closeDrawer();
-    openEntryForm({ preset: { type: 'inflow', partyKind: 'client', partyId: p.clientId, projectId: p.projectId, piId: p.id, categoryId: cat, departmentId: o ? o.departmentId : '', taxable: st.outstandingTaxable || p.taxable, gstRate: p.gstRate, gstType: p.gstType, tdsRate: p.tdsRate, refNo: p.taxInvoiceNo || p.piNo, description: p.milestone, paymentMode: 'NEFT' } });
-  },
-  'sales-set': el => { S.sales[el.dataset.k] = el.dataset.v; render({ keepScroll: true }); },
-  'st-edit': () => { S.salesEdit = true; S.salesDraft = null; S.sales.metric = 'billed'; render({ keepScroll: true }); },
-  'st-cancel': () => { S.salesEdit = false; S.salesDraft = null; render({ keepScroll: true }); },
-  'st-save': async () => {
-    try {
-      const cur = JSON.parse(JSON.stringify((Store.data.targets || {})[S.fy] || {}));
-      for (const [d, arr] of Object.entries(S.salesDraft || {})) if (arr.some(x => +x) || cur[d]) cur[d] = arr.map(x => +x || 0);
-      await api.saveTargets(S.fy, cur); S.salesEdit = false; S.salesDraft = null; S.tgDraft = null; toast('Targets saved'); render({ keepScroll: true });
-    } catch (err) { toast(err.message, 'error'); }
-  },
-  'ord-set': el => { S.ord[el.dataset.k] = el.dataset.v; render({ keepScroll: true }); },
-  'pi-set': el => { S.pi[el.dataset.k] = el.dataset.v; render({ keepScroll: true }); },
-  'tg-set': el => { S.tg[el.dataset.k] = el.dataset.v; S.salesEdit = false; S.salesDraft = null; if (S.page !== 'targets') go('targets'); else render(); },
-  'tg-dep': el => { S.tg.dep = el.dataset.id; render({ keepScroll: true }); setTimeout(() => $('.sc-card')?.scrollIntoView({ behavior: 'smooth' }), 50); },
-  'tg-split': el => { const i = $(`[data-tg-annual="${el.dataset.id}"]`); const a = +i.value; if (!(a > 0)) return toast('Enter an annual amount first', 'error'); const m = Math.round(a / 12); S.tgDraft.rows[el.dataset.id] = Array.from({ length: 12 }, (_, k) => k < 11 ? m : a - m * 11); render({ keepScroll: true }); },
-  'tg-copy': () => { const prev = (Store.data.targets || {})[S.fy - 1] || {}; Object.keys(S.tgDraft.rows).forEach(d => { if (prev[d]) S.tgDraft.rows[d] = prev[d].slice(); }); render({ keepScroll: true }); toast('Copied – review and save'); },
-  'tg-save': async () => { try { await api.saveTargets(S.fy, JSON.parse(JSON.stringify(S.tgDraft.rows))); S.tgDraft = null; toast('Targets saved'); render({ keepScroll: true }); } catch (err) { toast(err.message, 'error'); } },
-  'print-sc': () => printScorecards([S.tg.dep], S.tg.ym, api.me().role === 'owner' && S.tg.costs),
-  'print-all': () => printScorecards(scoreDepts().map(d => d.id), S.tg.ym, false),
-});
-
-/* ============================ EMAIL: composer, outbox, settings ============================ */
-IC.mail = '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>';
-IC.send = '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>';
-S.outbox = { status: 'open', q: '' };
-
-/** Composer state for one email. */
-function initEmail(kind, partyId, forceOn) {
-  const p = api.get('parties', partyId), list = partyEmails(p), es = emailSettings();
-  const r = emailRoute(p, kind);
-  return { kind, partyId, on: forceOn || (es.autoTick && r.to.length > 0), to: r.to.slice(), newTo: '', saveNew: true, cc: [...new Set([...r.cc, ...(es.cc || [])])].join(', '), subject: '', body: '', edited: false, attachDocs: true, files: [], err: '' };
-}
-function refreshEmail(E, vars) { if (!E || E.edited) return; const t = emailSettings().templates[E.kind] || DEFAULT_EMAIL_TEMPLATES[E.kind]; E.subject = fillTemplate(t.subject, vars); E.body = fillTemplate(t.body, vars); }
-function emailBoxHTML(E, { docs = 0, standalone = false } = {}) {
-  if (!E) return '';
-  const p = api.get('parties', E.partyId), saved = partyEmails(p), who = p ? (p.kind === 'client' ? 'client' : 'vendor') : 'party';
-  const extra = E.to.filter(x => !saved.includes(x));
-  const head = standalone ? '' : `<label class="check em-toggle"><input type="checkbox" data-em="on" ${E.on ? 'checked' : ''}> ${icon('mail').replace('<svg', '<svg style="width:15px;height:15px"')} Email this to the ${who} <span class="muted" style="font-weight:400">· ${esc(EMAIL_KINDS[E.kind])}</span></label>`;
-  if (!E.on && !standalone) return `<div class="fsec em-box off">${head}${!saved.length ? `<div class="hint" style="margin:4px 0 0 26px">No email saved for ${esc(p ? p.name : 'this party')} yet. Tick to add one.</div>` : ''}</div>`;
-  return `<div class="fsec em-box">${head}
-    <div class="em-grid">
-      <div class="lbl">To</div><div><div class="em-to">${[...saved, ...extra].map(x => { const c = partyContacts(p).find(c => c.email === x); return `<label class="em-chip ${E.to.includes(x) ? 'on' : ''}" title="${esc(x)}"><input type="checkbox" data-em-to="${esc(x)}" ${E.to.includes(x) ? 'checked' : ''}>${c && c.name ? `<b>${esc(c.name)}</b> <span class="faint">${esc(x)}</span>` : esc(x)}${saved.includes(x) ? '' : ' <span class="faint">new</span>'}</label>`; }).join('') || '<span class="muted" style="font-size:12.5px">No saved email for this party</span>'}</div>
-        <div class="row" style="flex-wrap:nowrap;gap:6px;margin-top:8px"><input class="input" data-em="newTo" value="${esc(E.newTo)}" placeholder="Add email address" type="email" style="max-width:300px"><button type="button" class="btn btn-sm" data-em-act="add">${icon('plus')} Add</button>
-        ${p ? `<label class="check" style="font-size:12.5px"><input type="checkbox" data-em="saveNew" ${E.saveNew ? 'checked' : ''}> Save new addresses to ${esc(p.name)}</label>` : ''}</div>${E.err ? `<div class="err" style="margin-top:4px">${esc(E.err)}</div>` : ''}</div>
-      <div class="lbl">CC</div><div><input class="input" data-em="cc" value="${esc(E.cc)}" placeholder="Optional, comma-separated"></div>
-      <div class="lbl">Subject</div><div><input class="input" data-em="subject" value="${esc(E.subject)}"></div>
-      <div class="lbl">Message</div><div><textarea class="textarea em-body" data-em="body" rows="9">${esc(E.body)}</textarea>
-        <div class="row" style="justify-content:space-between;margin-top:4px"><span class="hint">${E.edited ? 'Edited · amounts no longer update automatically' : 'Filled from the template · updates as you change amounts'}</span>${E.edited ? '<button type="button" class="btn btn-sm btn-ghost" data-em-act="reset">Reset to template</button>' : ''}</div></div>
-      <div class="lbl">Attach</div><div>${docs ? `<label class="check" style="font-size:13px"><input type="checkbox" data-em="attachDocs" ${E.attachDocs ? 'checked' : ''}> Documents on this record (${docs})</label>` : '<span class="muted" style="font-size:12.5px">No documents on this record.</span>'}
-        <div class="files" style="margin-top:6px">${E.files.map((f, i) => `<div class="file" style="border-color:var(--gold-line);background:var(--gold-soft)"><span>${esc(f.name)}</span><button type="button" data-em-act="rm-file" data-i="${i}">${icon('x').replace('<svg', '<svg style="width:12px;height:12px"')}</button></div>`).join('')}
-        <button type="button" class="btn btn-sm" data-em-act="pick">${icon('clip')} Upload file for this email</button></div><input type="file" class="em-files" multiple accept="image/*,application/pdf" style="display:none"></div>
-    </div>
-    <div class="em-note">${icon('info').replace('<svg', '<svg style="width:14px;height:14px;flex:none"')}<span>Saving puts this email in the <b>outbox</b>; it is sent from <b>${esc(emailSettings().from)}</b> once the mail server is connected. Until then you can open any outbox email in your mail app.</span></div></div>`;
-}
-/** Delegated handler. Returns true if the event was an email event. */
-function handleEmail(ev, E, redraw) {
-  if (!E) return false; const t = ev.target;
-  if (ev.type === 'input' && t.dataset && t.dataset.em) {
-    const k = t.dataset.em; if (['subject', 'body'].includes(k)) { E[k] = t.value; if (!E.edited) { E.edited = true; const h = t.closest('.em-box').querySelector('.em-grid .hint'); if (h) h.textContent = 'Edited · amounts no longer update automatically'; } }
-    else if (k === 'newTo' || k === 'cc') E[k] = t.value; return true;
-  }
-  if (ev.type === 'change') {
-    if (t.dataset && t.dataset.em && t.type === 'checkbox') { E[t.dataset.em] = t.checked; if (t.dataset.em === 'on') redraw(); return true; }
-    if (t.dataset && t.dataset.emTo != null) { const x = t.dataset.emTo; E.to = t.checked ? [...new Set([...E.to, x])] : E.to.filter(y => y !== x); redraw(); return true; }
-    if (t.classList && t.classList.contains('em-files')) { E.files.push(...[...t.files].filter(f => /^image\//.test(f.type) || f.type === 'application/pdf')); redraw(); return true; }
-  }
-  if (ev.type === 'click') {
-    const b = t.closest('[data-em-act]'); if (!b) return false; const a = b.dataset.emAct;
-    if (a === 'add') { const xs = splitEmails(E.newTo); const bad = xs.filter(x => !validEmail(x)); if (!xs.length || bad.length) { E.err = bad.length ? 'Not a valid email: ' + bad.join(', ') : 'Type an email address first'; } else { E.err = ''; E.to = [...new Set([...E.to, ...xs])]; E.newTo = ''; } redraw(); }
-    if (a === 'reset') { E.edited = false; E._reset = true; redraw(); }
-    if (a === 'pick') b.closest('.em-box').querySelector('.em-files').click();
-    if (a === 'rm-file') { E.files.splice(+b.dataset.i, 1); redraw(); }
-    return true;
-  }
-  if (ev.type === 'keydown' && ev.key === 'Enter' && t.dataset && t.dataset.em === 'newTo') { ev.preventDefault(); t.closest('.em-box').querySelector('[data-em-act=add]').click(); return true; }
-  return false;
-}
-function bindEmailEvents(root, getE, redraw) { ['input', 'change', 'click', 'keydown'].forEach(type => root.addEventListener(type, ev => handleEmail(ev, getE(), redraw))); }
-/** Validate before the record is saved, so a bad address doesn't leave a half-done save. */
-function checkEmail(E) {
-  if (!E || !E.on) return;
-  const pending = splitEmails(E.newTo); if (pending.length) { if (pending.some(x => !validEmail(x))) throw new Error('Check the email address you typed'); E.to = [...new Set([...E.to, ...pending])]; E.newTo = ''; }
-  if (!E.to.length) throw new Error('Pick or add at least one email address, or untick “Email this”');
-  const badCc = splitEmails(E.cc).filter(x => !validEmail(x)); if (badCc.length) throw new Error('Not a valid CC address: ' + badCc.join(', '));
-}
-async function finalizeEmail(E, { entity, entityId, docs = [] }) {
-  if (!E || !E.on) return null;
-  const metas = [];
-  for (const fl of E.files) { const id = uid('f'); const meta = { id, name: fl.name, type: fl.type, size: fl.size }; await FileStore.put({ ...meta, blob: fl }); metas.push(meta); }
-  const p = api.get('parties', E.partyId);
-  if (p && E.saveNew) { const saved = partyEmails(p); const add = E.to.filter(x => !saved.includes(x)); if (add.length && api.can('party.edit')) {
-    const contacts = [...partyContacts(p), ...add.map((x, i) => ({ id: uid('ct'), name: '', designation: '', email: x, phone: '', whatsapp: false, tags: partyContacts(p).length || i ? ['projects'] : ['accounts'] }))];
-    await api.update('parties', p.id, { contacts, email: [...saved, ...add].join(', ') }, { summary: 'Email added for ' + p.name }); } }
-  return api.queueEmail({ kind: E.kind, entity, entityId, partyId: E.partyId, to: E.to, cc: splitEmails(E.cc), subject: E.subject, body: E.body, attachments: [...(E.attachDocs ? docs : []), ...metas] });
-}
-
-/** Standalone composer for an existing entry or PI. */
-function composeEmail(entity, id) {
-  if (!api.can('email.queue')) return toast('Not allowed for your role', 'error');
-  const rec = api.get(entity, id); const kind = entity === 'pis' ? 'pi_issued' : entryEmailKind(rec);
-  if (!kind) return toast('Emails are sent for vendor payments, client receipts and PIs only', 'error');
-  const partyId = entity === 'pis' ? rec.clientId : rec.partyId;
-  const E = initEmail(kind, partyId, true); E.on = true;
-  const vars = () => entity === 'pis' ? piEmailVars(rec) : entryEmailVars(rec);
-  closeDrawer();
-  const ov = openModal(`<div class="modal-h"><h2>${icon('mail').replace('<svg', '<svg style="width:18px;height:18px;display:inline;vertical-align:-3px;margin-right:6px"')}${esc(EMAIL_KINDS[kind])}</h2><button class="icon-btn" data-c="close">${icon('x')}</button></div><div class="modal-b" id="emBody"></div>
-    <div class="modal-f"><button class="btn" data-c="close">Cancel</button><button class="btn" data-c="mailapp">Open in mail app</button><button class="btn btn-gold" data-c="queue">${icon('send')} Queue email</button></div>`);
-  const body = $('#emBody', ov); const draw = () => { refreshEmail(E, vars()); body.innerHTML = `<div class="muted" style="font-size:13px;margin-bottom:12px">For ${esc(entity === 'pis' ? 'PI ' + rec.piNo : describe('entries', rec))}</div>` + emailBoxHTML(E, { docs: (rec.attachments || []).length, standalone: true }); };
-  draw(); bindEmailEvents(body, () => E, draw);
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-c]'); if (!b) return;
-    if (b.dataset.c === 'close') return ov.remove();
-    try {
-      checkEmail(E);
-      const m = await finalizeEmail(E, { entity, entityId: id, docs: rec.attachments || [] });
-      if (b.dataset.c === 'mailapp') { window.location.href = mailtoHref(m); await api.setEmailStatus(m.id, 'mailapp', 'Opened in mail app by ' + api.me().name); }
-      ov.remove(); toast(b.dataset.c === 'mailapp' ? 'Opened in your mail app · logged in the outbox' : 'Email queued to ' + m.to.join(', ')); afterWrite();
-    } catch (err) { toast(err.message, 'error'); }
-  });
-}
-function emailsFor(entity, id) { return api.list('emails').filter(m => m.entity === entity && m.entityId === id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
-const emailStatusChip = s => `<span class="chip ${{ queued: 'gold', sent: 'inflow', failed: 'overdue', cancelled: '', mailapp: 'transfer' }[s] || ''}">${EMAIL_STATUS[s] || s}</span>`;
-function emailSectionHTML(entity, id, canSend) {
-  const list = emailsFor(entity, id);
-  return `<div class="fsec-h" style="margin-top:22px">Emails (${list.length})</div>${list.map(m => `<div class="list-row" style="padding:8px 0;cursor:pointer" data-act="view-email" data-id="${m.id}"><span class="faint" style="width:16px;flex:none">${icon('mail')}</span><div class="grow"><div class="t" style="font-size:13px">${esc(m.subject)}</div><div class="s">${esc(m.to.join(', '))} · ${fmtDateTime(m.createdAt)}</div></div>${emailStatusChip(m.status)}</div>`).join('') || '<div class="muted" style="font-size:13px">No emails sent for this record.</div>'}
-    ${canSend ? `<button class="btn btn-sm" style="margin-top:10px" data-act="compose-email" data-entity="${entity}" data-id="${id}">${icon('mail')} ${list.length ? 'Send another email' : 'Email this'}</button>` : ''}`;
-}
-
-/* ---------------- outbox page ---------------- */
-PAGES.outbox = {
-  title: 'Email outbox',
-  render() {
-    const F = S.outbox, q = F.q.trim().toLowerCase();
-    const all = api.list('emails');
-    const cnt = st => all.filter(m => st === 'open' ? ['queued', 'failed'].includes(m.status) : st === 'all' || m.status === st).length;
-    let rows = all.filter(m => (F.status === 'all' || (F.status === 'open' ? ['queued', 'failed'].includes(m.status) : m.status === F.status)) && (!q || [m.subject, m.to.join(' '), nameOf('parties', m.partyId)].join(' ').toLowerCase().includes(q)));
-    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return `<div class="notice info" style="margin-bottom:16px">${icon('info')}<div>Emails are <b>queued</b> here when entries and PIs are saved. Once the backend mail service is connected it sends every queued email from <b>${esc(emailSettings().from)}</b> and marks it Sent or Failed. Until then, use <b>Open in mail app</b> to send any email from Outlook or Gmail.</div></div>
-    <div class="toolbar"><div class="seg">${[['open', 'Needs attention'], ['queued', 'Queued'], ['sent', 'Sent'], ['failed', 'Failed'], ['all', 'All']].map(([k, l]) => `<button class="${F.status === k ? 'on' : ''}" data-act="ob-set" data-v="${k}">${l} <span class="faint">${cnt(k)}</span></button>`).join('')}</div>
-      <div class="field" style="flex:1;min-width:220px"><input class="input" data-inp="obq" value="${esc(F.q)}" placeholder="Search recipient, subject, party…"></div>${api.can('settings.edit') ? '<a class="btn" href="#/settings">Templates & sender</a>' : ''}</div>
-    <div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Created</th><th>Type</th><th>To</th><th style="width:34%">Subject</th><th>Record</th><th>Status</th><th></th></tr></thead><tbody>
-    ${rows.map(m => `<tr class="click" data-act="view-email" data-id="${m.id}"><td class="nowrap">${fmtDateTime(m.createdAt)}<div class="cell-sub">${esc(userName(m.createdBy))}</div></td><td class="nowrap">${esc({ vendor_payment: 'Payment advice', client_receipt: 'Receipt', pi_issued: 'PI', pi_reminder: 'Reminder', statement: 'Statement', tds_request: 'TDS request', digest: 'Digest', gst_pack: 'GST to CA', tds_pack: 'TDS to CA', tds_return: 'TDS return pack', tds_cert: 'Form 16A / 16' }[m.kind] || EMAIL_KINDS[m.kind] || m.kind)}</td><td style="max-width:220px"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.to.join(', '))}</div><div class="cell-sub">${esc(nameOf('parties', m.partyId))}</div></td>
-      <td><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px">${esc(m.subject)}</div>${m.attachments.length ? `<div class="cell-sub">${icon('clip').replace('<svg', '<svg style="width:12px;height:12px;display:inline;vertical-align:-2px"')} ${m.attachments.length} attachment(s)</div>` : ''}</td>
-      <td class="nowrap">${m.entity === 'pis' ? esc(nameOf('pis', m.entityId).split('/').slice(-2).join('/')) : 'Entry'}</td><td>${emailStatusChip(m.status)}${m.error ? `<div class="cell-sub out">${esc(m.error)}</div>` : ''}</td>
-      <td class="nowrap"><a class="icon-btn" title="Open in mail app" href="${esc(mailtoHref(m))}" data-act="ob-mailapp" data-id="${m.id}">${icon('ext')}</a></td></tr>`).join('') || '<tr><td colspan="7"><div class="empty"><b>Nothing here</b>No emails match this filter.</div></td></tr>'}
-    </tbody></table></div></div>`;
-  },
-};
-function viewEmail(id) {
-  const m = api.get('emails', id); if (!m) return;
-  const canStatus = api.can('email.status');
-  const ov = openModal(`<div class="modal-h"><h2 style="font-size:15.5px">${esc(m.subject)}</h2>${emailStatusChip(m.status)}<button class="icon-btn" data-v="close">${icon('x')}</button></div>
-    <div class="modal-b"><dl class="kv" style="grid-template-columns:90px 1fr;margin-bottom:14px"><dt>From</dt><dd>${esc(m.from)}</dd><dt>To</dt><dd>${esc(m.to.join(', '))}</dd>${m.cc.length ? `<dt>CC</dt><dd>${esc(m.cc.join(', '))}</dd>` : ''}<dt>Type</dt><dd>${esc(EMAIL_KINDS[m.kind])}</dd><dt>Record</dt><dd><a href="#" data-v="record">${m.entity === 'pis' ? 'PI ' + esc(nameOf('pis', m.entityId)) : 'Open entry'}</a></dd>${m.sentAt ? `<dt>Sent</dt><dd>${fmtDateTime(m.sentAt)}</dd>` : ''}${m.error ? `<dt>Error</dt><dd class="out">${esc(m.error)}</dd>` : ''}</dl>
-    <pre class="em-pre">${esc(m.body)}</pre>
-    ${m.attachments.length ? `<div class="fsec-h" style="margin-top:16px">Attachments</div><div class="files">${m.attachments.map(a => `<button class="file" data-act="view-file" data-id="${a.id}">${icon('file').replace('<svg', '<svg style="width:14px;height:14px"')}<span>${esc(a.name)}</span></button>`).join('')}</div>` : ''}
-    <div class="fsec-h" style="margin-top:16px">History</div>${(m.events || []).map(e => `<div class="tl"><div style="flex:1"><b>${esc(EMAIL_STATUS[e.status] || e.status)}</b> <span class="muted">· ${e.by === 'system' ? 'Mail server' : esc(userName(e.by))}</span><div class="when">${fmtDateTime(e.ts)}${e.note ? ' · ' + esc(e.note) : ''}</div></div></div>`).join('')}</div>
-    <div class="modal-f">${canStatus && m.status !== 'cancelled' ? `<span class="muted" style="font-size:11.5px;margin-right:auto;align-self:center">Status buttons are for testing until the mail server updates them.</span>${m.status !== 'sent' ? '<button class="btn btn-sm" data-v="sent">Mark sent</button>' : ''}${m.status !== 'failed' ? '<button class="btn btn-sm" data-v="failed">Mark failed</button>' : ''}${['failed', 'mailapp', 'sent'].includes(m.status) ? '<button class="btn btn-sm" data-v="queued">Re-queue</button>' : ''}` : ''}
-      ${api.can('email.cancel') && ['queued', 'failed'].includes(m.status) ? '<button class="btn btn-sm btn-danger" data-v="cancelled">Cancel</button>' : ''}
-      <a class="btn btn-gold" href="${esc(mailtoHref(m))}" data-v="mailapp">${icon('ext')} Open in mail app</a></div>`);
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-v]'); if (!b) return; const v = b.dataset.v;
-    if (v === 'close') return ov.remove();
-    if (v === 'record') { ev.preventDefault(); ov.remove(); return m.entity === 'pis' ? openPI(m.entityId) : openEntry(m.entityId); }
-    if (v === 'mailapp') { if (m.status === 'queued' || m.status === 'failed') { try { await api.setEmailStatus(m.id, 'mailapp', 'Opened in mail app by ' + api.me().name); } catch (e) {} } setTimeout(() => { ov.remove(); render({ keepScroll: true }); }, 300); return; }
-    let note = '';
-    if (v === 'failed') { note = prompt('Failure reason (e.g. bounced)?', 'Bounced – mailbox unavailable'); if (note === null) return; }
-    try { await api.setEmailStatus(m.id, v, note); ov.remove(); toast('Email marked ' + EMAIL_STATUS[v].toLowerCase()); render({ keepScroll: true }); } catch (err) { toast(err.message, 'error'); }
-  });
-}
-
-/* ---------------- settings card ---------------- */
-function emailSettingsCard() {
-  const es = emailSettings(), owner = api.can('settings.edit'), dis = owner ? '' : 'disabled';
-  return `<div class="card"><div class="card-h"><div class="grow"><h3>Email</h3><div class="sub">Sender, default CC and the templates used for payment advices, receipts and PIs</div></div>${owner ? '<button class="btn btn-sm" data-act="em-reset-tpl">Reset templates</button>' : ''}</div><div class="card-b"><form id="emForm">
-    <div class="fgrid">
-      <div class="field"><label>Send from</label><input class="input" name="from" value="${esc(es.from)}" ${dis}><div class="hint">The backend sends as this address</div></div>
-      <div class="field"><label>Always CC</label><input class="input" name="cc" value="${esc((es.cc || []).join(', '))}" placeholder="Optional, comma-separated" ${dis}></div>
-      <div class="field" style="justify-content:flex-end"><label class="check" style="height:38px"><input type="checkbox" name="autoTick" ${es.autoTick ? 'checked' : ''} ${dis}> Tick “Email this” automatically when the party has an email</label></div>
-    </div>
-    ${Object.keys(DEFAULT_EMAIL_TEMPLATES).map(k => [k, EMAIL_KINDS[k]]).map(([k, l]) => `<div class="fsec" style="margin-top:18px"><div class="fsec-h">${esc(l)}</div><div class="fgrid c2"><div class="field span3"><label>Subject</label><input class="input" name="${k}.subject" value="${esc((es.templates[k] || DEFAULT_EMAIL_TEMPLATES[k]).subject)}" ${dis}></div><div class="field span3"><label>Message</label><textarea class="textarea em-body" rows="8" name="${k}.body" ${dis}>${esc((es.templates[k] || DEFAULT_EMAIL_TEMPLATES[k]).body)}</textarea></div></div></div>`).join('')}
-    <div class="hint" style="margin-top:6px">Placeholders: ${Object.entries(EMAIL_VARS).map(([k, l]) => `<code class="mono" title="${esc(l)}">{${k}}</code>`).join(' ')}</div>
-    </form>${owner ? '<div class="row" style="margin-top:14px;justify-content:flex-end"><button class="btn btn-navy" data-act="em-save-settings">Save email settings</button></div>' : ''}</div></div>`;
-}
-
-Object.assign(ACT, {
-  'view-email': el => viewEmail(el.dataset.id),
-  'compose-email': el => composeEmail(el.dataset.entity, el.dataset.id),
-  'ob-set': el => { S.outbox.status = el.dataset.v; render({ keepScroll: true }); },
-  'ob-mailapp': async el => { const m = api.get('emails', el.dataset.id); if (m && ['queued', 'failed'].includes(m.status) && api.can('email.status')) { try { await api.setEmailStatus(m.id, 'mailapp', 'Opened in mail app by ' + api.me().name); } catch (e) {} setTimeout(() => render({ keepScroll: true }), 300); } window.location.href = el.getAttribute('href'); },
-  'em-save-settings': async () => {
-    const f = $('#emForm'); const cc = splitEmails(f.cc.value); const bad = [f.from.value.trim(), ...cc].filter(x => !validEmail(x));
-    if (bad.length) return toast('Not a valid email: ' + bad.join(', '), 'error');
-    const templates = Object.fromEntries(Object.keys(DEFAULT_EMAIL_TEMPLATES).map(k => [k, { subject: f[k + '.subject'].value, body: f[k + '.body'].value }]));
-    try { await api.saveEmailSettings({ from: f.from.value.trim(), cc, autoTick: f.autoTick.checked, templates }); toast('Email settings saved'); render({ keepScroll: true }); } catch (err) { toast(err.message, 'error'); }
-  },
-  'em-reset-tpl': async () => { if (!await confirmBox({ title: 'Reset email templates?', body: 'All templates go back to the original wording. Sender and CC are kept.', ok: 'Reset' })) return; await api.saveEmailSettings({ templates: JSON.parse(JSON.stringify(DEFAULT_EMAIL_TEMPLATES)) }); toast('Templates reset'); render({ keepScroll: true }); },
-});
-/* ============================ CLIENTS & VENDORS: tabbed form, contacts, drawer ============================ */
-IC.phone = '<path d="M22 16.92v3a2 2 0 01-2.18 2 19.8 19.8 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.8 19.8 0 012.1 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0122 16.92z"/>';
-IC.chat = '<path d="M21 11.5a8.4 8.4 0 01-12.3 7.4L3 21l2.1-5.6A8.4 8.4 0 1121 11.5z"/>';
-const PF_TABS = [['company', 'Company'], ['people', 'People'], ['tax', 'Tax, terms & bank']];
-const blankContact = (tags = ['accounts']) => ({ id: uid('ct'), name: '', designation: '', email: '', phone: '', whatsapp: false, tags });
-const stateOptions = sel => opts(Object.entries(IN_STATES).sort((a, b) => a[0] === '99' ? 1 : b[0] === '99' ? -1 : a[1].localeCompare(b[1])), sel, 'Select state');
-const telHref = n => 'tel:' + String(n || '').replace(/[^\d+]/g, '');
-const waHref = n => { let d = String(n || '').replace(/\D/g, ''); if (d.length === 10) d = '91' + d; return 'https://wa.me/' + d; };
-
-/** Full tabbed form for a client or vendor. quick = short form (name, GSTIN, one contact) with a link to all details. */
-function partyForm(kind, id, { quick = false, cb = null, tab = 'company', preset = {} } = {}) {
-  const old = id ? api.get('parties', id) : null;
-  if (old) normalizeParty(old);
-  const v = old ? JSON.parse(JSON.stringify(old)) : { kind, name: '', gstin: '', gstType: kind === 'client' ? 'intra' : 'none', stateCode: '', pan: '', address: '', pincode: '', creditDays: kind === 'client' ? 30 : '', contacts: [blankContact()], bank: kind === 'vendor' ? { accName: '', bankName: '', accNo: '', ifsc: '', upi: '' } : null, notes: '', active: true, ...preset };
-  if (!v.contacts || !v.contacts.length) v.contacts = [blankContact()];
-  if (kind === 'vendor' && !v.bank) v.bank = { accName: '', bankName: '', accNo: '', ifsc: '', upi: '' };
-  const F = { tab, quick, errs: {}, gstAuto: !old };
-  const L = kind === 'client' ? 'client' : 'vendor';
-  const ov = openModal(`<div class="modal-h"><h2>${old ? 'Edit' : 'Add'} ${L}</h2><span class="muted" style="font-size:12.5px" id="pfName">${old ? esc(old.name) : ''}</span><span class="spacer"></span><button class="icon-btn" data-p="close">${icon('x')}</button></div>
-    <div id="pfTabs"></div><div class="modal-b" id="pfBody"></div>
-    <div class="modal-f"><span class="muted" style="font-size:12px;margin-right:auto" id="pfFootNote"></span><button class="btn" data-p="close">Cancel</button><button class="btn btn-gold" data-p="save">${old ? 'Save' : 'Add ' + L}</button></div>`, 'pf');
-  const body = $('#pfBody', ov), tabsEl = $('#pfTabs', ov);
-  const f = (k, label, inner, cls = '', hint = '') => `<div class="field ${cls} ${F.errs[k] ? 'has-err' : ''}"><label>${label}</label>${inner}${F.errs[k] ? `<div class="err">${esc(F.errs[k])}</div>` : hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
-  const inp = (k, val, attrs = '') => `<input class="input" data-p-f="${k}" value="${esc(val ?? '')}" ${attrs}>`;
-  const gi = () => gstinInfo(v.gstin);
-  const contactCard = (c, i) => `<div class="pf-person" data-i="${i}">
-      <div class="pf-p-head"><span class="pf-avatar">${esc((c.name || c.email || '?').trim().charAt(0).toUpperCase() || '?')}</span><b>${esc(c.name || 'Person ' + (i + 1))}</b>${v.contacts.length > 1 ? `<button type="button" class="icon-btn" data-p="rm-person" data-i="${i}" title="Remove">${icon('trash')}</button>` : ''}</div>
-      <div class="fgrid c2">
-        ${f('c' + i + 'name', 'Name', inp(`contacts.${i}.name`, c.name, 'placeholder="e.g. Sunita Rao"'))}${f('c' + i + 'des', 'Designation', inp(`contacts.${i}.designation`, c.designation, 'placeholder="e.g. Accounts Payable"'))}
-        ${f('c' + i + 'email', 'Email', inp(`contacts.${i}.email`, c.email, 'type="email" placeholder="name@company.com"'))}${f('c' + i + 'phone', 'Phone', inp(`contacts.${i}.phone`, c.phone, 'type="tel" placeholder="98xxx xxxxx"'))}
-      </div>
-      <div class="pf-tags"><span class="muted" style="font-size:12px">Receives</span>${Object.entries(CONTACT_TAGS).map(([t, l]) => `<label class="pf-tag ${(c.tags || []).includes(t) ? 'on' : ''}" title="${esc(CONTACT_TAG_HINT[t])}"><input type="checkbox" data-p-tag="${i}" value="${t}" ${(c.tags || []).includes(t) ? 'checked' : ''}>${l}</label>`).join('')}
-        <label class="check" style="font-size:12.5px;margin-left:auto"><input type="checkbox" data-p-f="contacts.${i}.whatsapp" ${c.whatsapp ? 'checked' : ''}> On WhatsApp</label></div>
-    </div>`;
-  const gstHint = () => { const g = gi(); return g ? (g.valid ? `✓ ${esc(IN_STATES[g.stateCode] || '')} · PAN ${esc(g.pan)}` : '<span class="out">A GSTIN has 15 characters, e.g. 27ABCDE1234F1Z5</span>') : 'State and PAN fill in from the GSTIN'; };
-  const stateHint = () => v.stateCode ? `GST on ${L === 'client' ? 'invoices' : 'bills'}: <b>${esc(GST_TYPES[gstTypeForState(v.stateCode)])}</b>` : '';
-  const company = () => { const g = gi();
-    return `<div class="fgrid c2">
-      ${f('name', L === 'client' ? 'Client name *' : 'Vendor name *', inp('name', v.name, 'placeholder="Registered business name"'), 'span3')}
-      ${F.errs.gstin ? f('gstin', 'GSTIN', inp('gstin', v.gstin, 'style="text-transform:uppercase" maxlength="15"')) : `<div class="field"><label>GSTIN</label>${inp('gstin', v.gstin, 'placeholder="27ABCDE1234F1Z5" style="text-transform:uppercase" maxlength="15"')}<div class="hint" id="pfGstHint">${gstHint()}</div></div>`}
-      <div class="field"><label>State</label><select class="select" data-p-f="stateCode">${stateOptions(v.stateCode)}</select><div class="hint" id="pfStateHint">${stateHint()}</div></div>
-      ${f('address', 'Billing address', `<textarea class="textarea" data-p-f="address" rows="2" placeholder="Building, street, area, city">${esc(v.address || '')}</textarea>`, 'span3')}
-      ${f('pincode', 'PIN code', inp('pincode', v.pincode, 'inputmode="numeric" maxlength="6"'))}
-    </div>`; };
-  const people = () => `<div class="pf-help">${icon('info')}<span>Tag who receives what. <b>Accounts</b> people get payment advices, receipts and PIs; <b>Projects</b> are copied on PIs and receipts; <b>Management</b> on PIs. The email is filled in for you at entry time.</span></div>
-      <div class="pf-people">${v.contacts.map(contactCard).join('')}</div>
-      <button type="button" class="btn btn-sm" data-p="add-person">${icon('plus')} Add person</button>`;
-  const tax = () => `<div class="fsec"><div class="fsec-h">Tax</div><div class="fgrid c2">
-      ${f('pan', 'PAN', inp('pan', v.pan, 'style="text-transform:uppercase" maxlength="10" placeholder="ABCDE1234F"'), '', gi() && gi().pan && gi().pan === v.pan ? 'From GSTIN' : '')}
-      ${kind === 'client' ? f('tan', 'TAN (their TDS account no.)', inp('tan', v.tan, 'style="text-transform:uppercase" maxlength="10" placeholder="MUMN12345A"'), '', 'Matches their TDS in your Form 26AS') : ''}
-      ${f('gstType', 'Default GST type', `<select class="select" data-p-f="gstType">${opts(Object.entries(GST_TYPES), v.gstType)}</select>`, '', F.gstAuto && v.stateCode ? 'Set from the state' : '')}
-    </div></div>
-    <div class="fsec"><div class="fsec-h">Payment terms</div><div class="fgrid c2">
-      ${f('creditDays', 'Credit period (days)', inp('creditDays', v.creditDays, 'type="number" min="0" step="1" placeholder="e.g. 30"'), '', L === 'client' ? 'PI due date = PI date + these days' : 'Shown when you record a payment to them')}
-    </div></div>
-    ${kind === 'vendor' ? `<div class="fsec"><div class="fsec-h">Bank details <span class="faint" style="text-transform:none;letter-spacing:0;font-weight:400">shown when paying them, and in the payment advice</span></div><div class="fgrid c2">
-      ${f('bank.accName', 'Account holder name', inp('bank.accName', v.bank.accName, `placeholder="${esc(v.name || 'As per bank')}"`))}${f('bank.bankName', 'Bank', inp('bank.bankName', v.bank.bankName, 'placeholder="e.g. HDFC Bank"'))}
-      ${f('bank.accNo', 'Account number', inp('bank.accNo', v.bank.accNo, 'inputmode="numeric"'))}${f('bank.ifsc', 'IFSC', inp('bank.ifsc', v.bank.ifsc, 'style="text-transform:uppercase" maxlength="11" placeholder="HDFC0001234"'))}
-      ${f('bank.upi', 'UPI ID', inp('bank.upi', v.bank.upi, 'placeholder="name@bank"'))}
-    </div></div>` : ''}
-    ${f('notes', 'Notes', `<textarea class="textarea" data-p-f="notes" rows="2">${esc(v.notes || '')}</textarea>`)}`;
-  const quickBody = () => { const c = v.contacts[0]; const g = gi();
-    return `<div class="fgrid c2">${f('name', L === 'client' ? 'Client name *' : 'Vendor name *', inp('name', v.name), 'span3')}
-      <div class="field"><label>GSTIN</label>${inp('gstin', v.gstin, 'style="text-transform:uppercase" maxlength="15"')}<div class="hint" id="pfGstHint">${g ? gstHint() : 'Optional · fills the state'}</div></div>
-      ${f('stateCode', 'State', `<select class="select" data-p-f="stateCode">${stateOptions(v.stateCode)}</select>`)}
-      <div class="span3 fsec-h" style="margin:6px 0 0">Main contact · ${L === 'client' ? 'accounts' : 'billing'}</div>
-      ${f('c0name', 'Name', inp('contacts.0.name', c.name))}${f('c0email', 'Email', inp('contacts.0.email', c.email, 'type="email"'))}${f('c0phone', 'Phone', inp('contacts.0.phone', c.phone, 'type="tel"'))}
-      </div><button type="button" class="ef-link" data-p="full" style="margin-top:12px">${icon('plus').replace('<svg', '<svg style="width:13px;height:13px"')} Add more people, address, ${kind === 'vendor' ? 'bank details, ' : ''}credit terms</button>`; };
-  const draw = () => {
-    tabsEl.innerHTML = F.quick ? '' : `<div class="pf-tabs">${PF_TABS.map(([k, l]) => `<button type="button" class="${F.tab === k ? 'on' : ''}" data-p="tab" data-v="${k}">${l}${k === 'people' ? ` <span class="tw-n">${v.contacts.filter(c => c.name || c.email || c.phone).length}</span>` : ''}${tabErr(k) ? ' <span class="pf-dot"></span>' : ''}</button>`).join('')}</div>`;
-    body.innerHTML = F.quick ? quickBody() : F.tab === 'company' ? company() : F.tab === 'people' ? people() : tax();
-    footNote();
-  };
-  const footNote = () => {
-    const badge = $('.pf-tabs [data-v=people] .tw-n', ov); if (badge) badge.textContent = v.contacts.filter(c => c.name || c.email || c.phone).length;
-    const r = emailRoute(v, kind === 'client' ? 'pi_issued' : 'vendor_payment');
-    $('#pfFootNote', ov).innerHTML = r.to.length ? `${icon('mail').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px;display:inline-block"')} Emails go to ${esc(r.to.join(', '))}${r.cc.length ? ` · cc ${r.cc.length}` : ''}` : '<span class="out">No email yet — add one so payment emails can go out</span>';
-  };
-  const tabErr = k => Object.keys(F.errs).some(e => (k === 'company' ? ['name', 'gstin', 'stateCode'] : k === 'people' ? [] : ['pan', 'tan', 'bank.ifsc', 'creditDays']).includes(e) || (k === 'people' && /^c\d/.test(e)));
-  const setPath = (path, val) => { const ks = path.split('.'); let o = v; for (let i = 0; i < ks.length - 1; i++) o = o[ks[i]]; o[ks[ks.length - 1]] = val; };
-  const onChange = (k, val, live) => {
-    if (k === 'gstin') { val = String(val).toUpperCase().trim(); setPath(k, val); const g = gstinInfo(val); if (g && g.valid) { if (g.stateCode) v.stateCode = g.stateCode; if (!v.pan || v.pan === (gstinInfo(old && old.gstin) || {}).pan) v.pan = g.pan; if (F.gstAuto || !old) v.gstType = gstTypeForState(v.stateCode) || v.gstType; }
-      delete F.errs.gstin; const h = $('#pfGstHint', body); if (h) h.innerHTML = val ? gstHint() : 'State and PAN fill in from the GSTIN'; const st = $('[data-p-f=stateCode]', body); if (st) st.value = v.stateCode || ''; const sh = $('#pfStateHint', body); if (sh) sh.innerHTML = stateHint(); return; }
-    if (k === 'stateCode') { v.stateCode = val; if (F.gstAuto || !old) v.gstType = gstTypeForState(val) || v.gstType; const sh = $('#pfStateHint', body); if (sh) sh.innerHTML = stateHint(); return; }
-    if (k === 'gstType') { v.gstType = val; F.gstAuto = false; return draw(); }
-    if (/^contacts\.\d+\.whatsapp$/.test(k)) { setPath(k, !!val); return; }
-    if (k === 'creditDays') val = val === '' ? '' : +val;
-    if (['pan', 'bank.ifsc', 'tan'].includes(k)) val = String(val).toUpperCase();
-    setPath(k, val);
-    if (k === 'name') $('#pfName', ov).textContent = val;
-    const m = k.match(/^contacts\.(\d+)\.(name|email)$/);
-    if (m) { const i = +m[1], c = v.contacts[i], card = $(`.pf-person[data-i="${i}"]`, body); if (card) { $('.pf-p-head b', card).textContent = c.name || 'Person ' + (i + 1); $('.pf-avatar', card).textContent = (c.name || c.email || '?').trim().charAt(0).toUpperCase() || '?'; } footNote(); }
-  };
-  const _unused = () => { const a = document.activeElement, k = a && a.dataset && a.dataset.pF, pos = a && a.selectionStart; draw(); if (k) { const el = $(`[data-p-f="${k}"]`, body); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} } } };
-  body.addEventListener('input', ev => { const el = ev.target.closest('[data-p-f]'); if (!el || el.tagName === 'SELECT' || el.type === 'checkbox') return; onChange(el.dataset.pF, el.value, true); });
-  body.addEventListener('change', ev => {
-    const t = ev.target;
-    if (t.dataset.pTag != null) { const c = v.contacts[+t.dataset.pTag]; c.tags = t.checked ? [...new Set([...(c.tags || []), t.value])] : (c.tags || []).filter(x => x !== t.value); t.closest('.pf-tag').classList.toggle('on', t.checked); footNote(); return; }
-    const el = t.closest('[data-p-f]'); if (!el) return;
-    if (el.type === 'checkbox') return onChange(el.dataset.pF, el.checked);
-    if (el.tagName === 'SELECT') return onChange(el.dataset.pF, el.value);
-    onChange(el.dataset.pF, el.value, false);
-  });
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-p]'); if (!b) return; const a = b.dataset.p;
-    if (a === 'close') return ov.remove();
-    if (a === 'tab') { F.tab = b.dataset.v; return draw(); }
-    if (a === 'full') { F.quick = false; F.tab = 'people'; return draw(); }
-    if (a === 'add-person') { v.contacts.push(blankContact(v.contacts.some(c => (c.tags || []).includes('accounts')) ? ['projects'] : ['accounts'])); draw(); const cards = $$('.pf-person', body); const last = cards[cards.length - 1]; if (last) { last.scrollIntoView({ block: 'nearest' }); $('input', last).focus(); } return; }
-    if (a === 'rm-person') { v.contacts.splice(+b.dataset.i, 1); return draw(); }
-    if (a === 'save') {
-      const errs = {};
-      v.name = String(v.name || '').trim(); if (!v.name) errs.name = 'Name is required';
-      if (v.gstin) { const g = gstinInfo(v.gstin); if (!g.valid) errs.gstin = 'GSTIN should be 15 characters, e.g. 27ABCDE1234F1Z5'; }
-      if (v.pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(v.pan)) errs.pan = 'PAN should look like ABCDE1234F';
-      if (v.tan && !/^[A-Z]{4}[0-9]{5}[A-Z]$/.test(v.tan)) errs.tan = 'TAN should look like MUMN12345A';
-      if (v.bank && v.bank.ifsc && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(v.bank.ifsc)) errs['bank.ifsc'] = 'IFSC is 11 characters, e.g. HDFC0001234';
-      v.contacts.forEach((c, i) => { c.email = String(c.email || '').trim(); if (c.email && !validEmail(c.email)) errs['c' + i + 'email'] = 'Not a valid email'; });
-      if (Object.keys(errs).length) { F.errs = errs; const first = Object.keys(errs)[0]; F.tab = /^c\d/.test(first) ? 'people' : ['pan', 'tan', 'bank.ifsc'].includes(first) ? 'tax' : 'company'; draw(); return toast(Object.values(errs)[0], 'error'); }
-      const contacts = v.contacts.filter(c => c.name || c.email || c.phone).map(c => ({ ...c, name: String(c.name || '').trim(), designation: String(c.designation || '').trim(), phone: String(c.phone || '').trim(), tags: c.tags || [] }));
-      
-      // Crucial validation: Ensure at least one contact has an email and receives_accounts is enabled
-      if (kind === 'client') {
-        const hasAccountsEmail = contacts.some(c => c.email && validEmail(c.email) && (c.tags || []).includes('accounts'));
-        if (!hasAccountsEmail) {
-          F.errs['accounts_email'] = 'No email yet — add one so payment emails can go out';
-          F.tab = 'people';
-          draw();
-          return toast('No email yet — add one so payment emails can go out', 'error');
-        }
-      }
-
-      const rec = { kind, name: v.name, gstin: String(v.gstin || '').toUpperCase(), gstType: v.gstType, stateCode: v.stateCode || '', pan: v.pan || '', address: v.address || '', pincode: v.pincode || '', creditDays: v.creditDays === '' || v.creditDays == null ? null : +v.creditDays,
-        tan: kind === 'client' ? (v.tan || '') : '', contacts, bank: kind === 'vendor' && v.bank && Object.values(v.bank).some(Boolean) ? { ...v.bank } : null, notes: v.notes || '',
-        email: [...new Set(contacts.map(c => c.email).filter(Boolean))].join(', '), phone: (contacts.find(c => c.phone) || {}).phone || '' };
-      try {
-        b.disabled = true;
-
-        // Step 1 & 2: Save to Supabase fss_client and fss_client_people if available
-        if (kind === 'client' && typeof (window as any).__supabaseSaveClient === 'function') {
-          try {
-            const sbRes = await (window as any).__supabaseSaveClient(rec, contacts, {
-              pan: v.pan,
-              tan: v.tan,
-              default_gst_type: GST_TYPES[v.gstType] || v.gstType || 'CGST + SGST',
-              credit_period: v.creditDays,
-              notes: v.notes,
-              bank_account_name: v.bank?.accName,
-              bank_account_number: v.bank?.accNo,
-              bank_ifsc: v.bank?.ifsc,
-              bank_name: v.bank?.bankName
-            });
-            if (sbRes?.client?.id) {
-              rec.id = sbRes.client.id;
-            }
-          } catch (sbErr: any) {
-            console.error('Supabase save error:', sbErr);
-            throw new Error(`Supabase error: ${sbErr.message || sbErr}`);
-          }
-        }
-
-        let saved;
-        if (old) { api.guard('party.edit'); saved = await api.update('parties', id, rec); toast('Saved ' + rec.name); }
-        else { api.guard('party.create'); if (api.list('parties').some(p => p.kind === kind && p.name.trim().toLowerCase() === rec.name.toLowerCase() && p.id !== rec.id)) throw new Error('A ' + L + ' with this name already exists'); saved = await api.create('parties', { ...rec, departmentId: null, designation: '', monthlySalary: null, joinDate: null, active: true }); toast('Added ' + rec.name); }
-        ov.remove();
-        if (cb) cb(saved || api.get('parties', id)); else render({ keepScroll: true });
-      } catch (err) { b.disabled = false; toast(err.message, 'error'); }
-    }
-  });
-  draw();
-  setTimeout(() => { const el = $('[data-p-f=name]', body); if (el && !old) el.focus(); }, 50);
-}
-
-/** Read-only directory card for a client / vendor. */
-function openParty(id) {
-  const p = api.get('parties', id); if (!p) return; normalizeParty(p);
-  const isC = p.kind === 'client', es = Calc.live().filter(e => e.partyId === id);
-  const [fyF, fyT] = fyRange(S.fy); const fyEs = es.filter(e => e.date >= fyF && e.date <= fyT);
-  const sumT = (list, t) => sum(list.filter(e => e.type === t), e => e.amount);
-  const last = es.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
-  const contacts = partyContacts(p);
-  const unpaid = isC ? api.list('pis').filter(x => x.clientId === id && x.status !== 'cancelled').map(x => Sales.piState(x).outstanding).reduce((a, b) => a + b, 0) : 0;
-  const head = `<div class="drawer-h"><div class="type-ic ${isC ? 'inflow' : 'outflow'}">${icon(isC ? 'in' : 'out')}</div><div style="flex:1;min-width:0"><div style="font:600 17px var(--f-head)">${esc(p.name)}</div><div class="muted" style="font-size:12.5px">${isC ? 'Client' : 'Vendor'}${p.stateCode ? ' · ' + esc(IN_STATES[p.stateCode] || '') : ''}${p.active ? '' : ' · Inactive'}</div></div><button class="icon-btn" data-act="close-drawer">${icon('x')}</button></div>`;
-  const pc = c => `<div class="pd-person"><span class="pf-avatar">${esc((c.name || c.email || '?').charAt(0).toUpperCase())}</span><div class="grow" style="min-width:0"><div class="t">${esc(c.name || c.email || c.phone)}</div><div class="s">${esc(c.designation || '')}${(c.tags || []).map(t => `<span class="pd-tag">${CONTACT_TAGS[t]}</span>`).join('')}</div>
-      <div class="s" style="margin-top:3px">${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : ''}${c.email && c.phone ? ' · ' : ''}${c.phone ? `<span class="mono">${esc(c.phone)}</span>` : ''}</div></div>
-      <div class="pd-acts">${c.email ? `<a class="icon-btn" href="mailto:${esc(c.email)}" title="Email">${icon('mail')}</a>` : ''}${c.phone ? `<a class="icon-btn" href="${telHref(c.phone)}" title="Call">${icon('phone')}</a>` : ''}${c.phone && c.whatsapp ? `<a class="icon-btn" href="${waHref(c.phone)}" target="_blank" rel="noopener" title="WhatsApp">${icon('chat')}</a>` : ''}</div></div>`;
-  const b = p.bank;
-  const body = `<div class="mini-kpis"><div><span>${isC ? 'Received' : 'Paid'} · ${esc(fyLabel(S.fy))}</span><b class="${isC ? 'in' : 'out'}">${money(sumT(fyEs, isC ? 'inflow' : 'outflow'))}</b></div><div><span>All time</span><b>${money(sumT(es, isC ? 'inflow' : 'outflow'))}</b></div>${isC ? `<div><span>Unpaid PIs</span><b class="${unpaid ? 'out' : ''}">${money(unpaid)}</b></div>` : `<div><span>Last paid</span><b>${last ? fmtDate(last.date) : '—'}</b></div>`}<div><span>Credit</span><b>${p.creditDays != null && p.creditDays !== '' ? p.creditDays + ' days' : '—'}</b></div></div>
-    <div class="fsec-h" style="margin-top:20px">People (${contacts.length})</div>${contacts.map(pc).join('') || '<div class="muted" style="font-size:13px">No contacts yet.</div>'}
-    <div class="fsec-h" style="margin-top:20px">Company</div><dl class="kv">${kvRow('GSTIN', p.gstin ? `<span class="mono">${esc(p.gstin)}</span>` : '')}${kvRow('PAN', p.pan ? `<span class="mono">${esc(p.pan)}</span>` : '')}${kvRow('GST on ' + (isC ? 'invoices' : 'bills'), esc(GST_TYPES[p.gstType] || ''))}${kvRow('Address', esc([p.address, p.pincode].filter(Boolean).join(' – ')))}${kvRow('Notes', esc(p.notes || ''))}</dl>
-    ${!isC ? `<div class="fsec-h" style="margin-top:20px">Bank details</div>${b && (b.accNo || b.upi) ? `<div class="pd-bank">${[['Account name', b.accName || p.name], ['Bank', b.bankName], ['Account no.', b.accNo], ['IFSC', b.ifsc], ['UPI', b.upi]].filter(x => x[1]).map(([k, val]) => `<div><span>${k}</span><b class="${/Account no|IFSC|UPI/.test(k) ? 'mono' : ''}">${esc(val)}</b><button class="icon-btn" title="Copy" data-act="copy" data-v="${esc(val)}">${icon('copy')}</button></div>`).join('')}</div>` : '<div class="muted" style="font-size:13px">No bank details saved.</div>'}` : ''}
-    <div class="fsec-h" style="margin-top:20px">Recent entries (${es.length})</div>${es.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8).map(entryListRow).join('') || '<div class="muted" style="font-size:13px">No entries yet.</div>'}`;
-  const foot = `${api.can('entry.create') ? `<button class="btn btn-gold" data-act="party-entry" data-id="${p.id}">${icon(isC ? 'in' : 'out')} ${isC ? 'Record receipt' : 'Record payment'}</button>` : ''}${api.can('party.edit') ? `<button class="btn" data-act="party-edit" data-id="${p.id}">${icon('edit')} Edit</button>` : ''}${isC && api.list('pis').some(x => x.clientId === p.id && x.status !== 'cancelled' && Sales.piState(x).outstanding > 0) ? `<button class="btn" data-act="soa" data-id="${p.id}">Statement</button>` : ''}<span class="spacer"></span>${es.length ? `<a class="btn btn-sm" href="#/ledger" data-act="party-ledger" data-id="${p.id}">All entries</a>` : ''}`;
-  drawerShell(head, body, foot);
-}
-Object.assign(ACT, {
-  'open-party': el => openParty(el.dataset.id),
-  'party-edit': el => { const p = api.get('parties', el.dataset.id); closeDrawer(); partyForm(p.kind, p.id, { cb: () => { render({ keepScroll: true }); openParty(p.id); } }); },
-  'party-entry': el => { const p = api.get('parties', el.dataset.id); closeDrawer(); openEntryForm({ kind: p.kind === 'client' ? 'client' : 'vendor', preset: { type: p.kind === 'client' ? 'inflow' : 'outflow', partyId: p.id, partyKind: p.kind } }); },
-  'party-ledger': el => { closeDrawer(); if (S.ledger) { S.ledger.partyId = el.dataset.id; } location.hash = '#/ledger'; render(); },
-  'copy': el => { try { navigator.clipboard.writeText(el.dataset.v); toast('Copied'); } catch (e) { toast('Copy not available here', 'error'); } },
-});
-/* ============================ BANK STATEMENT IMPORT & RECONCILIATION ============================ */
-/* Data: bankImports {id, accountId, fileName, layout, from, to, count, dupes, closing}
-         bankLines   {id, importId, accountId, date, narration, ref, debit, credit, balance, hash, status: open|matched|ignored, entryId, how: auto|manual|created|recurring|pi}
-         settings.bankMaps[accountId] = column map; settings.bankRules = [{key, partyId}] learned from confirmed lines.
-   BACKEND: POST /api/bank/import (file) returns parsed lines; matching can stay in the client or move to the server. */
-IC.upload = '<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/>';
-IC.link = '<path d="M10 13a5 5 0 007.07 0l3-3a5 5 0 00-7.07-7.07l-1.5 1.5"/><path d="M14 11a5 5 0 00-7.07 0l-3 3a5 5 0 007.07 7.07l1.5-1.5"/>';
-IC.bolt = '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>';
-S.bank = { acc: '', tab: 'review' };
-const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
-
-/* ---------- reading files ---------- */
-function parseCSV(text) {
-  text = text.replace(/^﻿/, '');
-  const first = text.split(/\r?\n/).slice(0, 15).join('\n');
-  const delim = [',', '\t', ';', '|'].map(d => [d, (first.match(new RegExp(d === '|' ? '\\|' : d, 'g')) || []).length]).sort((a, b) => b[1] - a[1])[0][0];
-  const rows = []; let row = [], cell = '', q = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (q) { if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; continue; }
-    if (c === '"') q = true; else if (c === delim) { row.push(cell); cell = ''; }
-    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
-    else cell += c;
-  }
-  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
-  return rows.map(r => r.map(x => String(x).trim()));
-}
-function loadXLSX() {
-  if (window.XLSX) return Promise.resolve();
-  return new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload = () => res(); sc.onerror = () => rej(new Error('Could not load the Excel reader (needs internet). Save the statement as CSV and try again.')); document.head.appendChild(sc); });
-}
-async function readSheetRows(file) {
-  if (/\.(xlsx|xls)$/i.test(file.name)) {
-    await loadXLSX();
-    const wb = XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }).map(r => r.map(x => typeof x === 'number' ? x : String(x).trim()));
-  }
-  if (/\.pdf$/i.test(file.name)) throw new Error('PDF statements are not supported. Download the statement as Excel or CSV from net banking.');
-  return parseCSV(await file.text());
-}
-
-/* ---------- column detection ---------- */
-const BANK_FIELDS = [['date', 'Date *'], ['narration', 'Narration / description *'], ['ref', 'Cheque / ref no.'], ['debit', 'Withdrawal (debit)'], ['credit', 'Deposit (credit)'], ['amount', 'Amount (single column)'], ['drcr', 'Dr / Cr indicator'], ['balance', 'Balance']];
-const COL_RX = {
-  date: /^(txn\.?|tran\.?|transaction|posting|value)?\s*date$|^date$|^txn date|^transaction date|^tran date/,
-  narration: /narration|description|particulars|remarks|details/,
-  ref: /chq|cheque|ref|utr/,
-  debit: /withdraw|debit|dr\.? amount|paid out|^dr$/,
-  credit: /deposit|credit|cr\.? amount|paid in|^cr$/,
-  amount: /^amount|^txn amount|^transaction amount/,
-  drcr: /^(dr\s*\/\s*cr|cr\s*\/\s*dr|type|dr\/cr)$/,
-  balance: /balance/,
-};
-function detectLayout(rows) {
-  for (let i = 0; i < Math.min(rows.length, 40); i++) {
-    const cells = rows[i].map(c => String(c).toLowerCase().replace(/\s+/g, ' ').trim());
-    if (cells.filter(Boolean).length < 3) continue;
-    const map = {};
-    cells.forEach((c, idx) => {
-      if (!c) return;
-      for (const f of ['balance', 'narration', 'ref', 'debit', 'credit', 'drcr', 'amount', 'date']) {
-        if (map[f] != null) continue;
-        if (f === 'date' && /value/.test(c) && cells.some(x => /^(txn |tran |transaction |posting )?date$|^date$/.test(x) && x !== c)) continue;
-        if (COL_RX[f].test(c) && !(f === 'ref' && /date/.test(c)) && !(f === 'narration' && /amount/.test(c))) { map[f] = idx; break; }
-      }
-    });
-    if (map.date != null && map.narration != null && ((map.debit != null && map.credit != null) || map.amount != null)) {
-      const h = cells.join('|');
-      const bank = /narration/.test(h) && /withdrawal amt/.test(h) ? 'HDFC Bank' : /transaction remarks/.test(h) ? 'ICICI Bank' : 'Detected columns';
-      return { headerRow: i, map, bank, sig: cells.filter(Boolean).join('|') };
-    }
-  }
-  return null;
-}
-const MON3 = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-function parseBankDate(v) {
-  if (v == null || v === '') return null;
-  if (typeof v === 'number' && v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 86400000)); return d.toISOString().slice(0, 10); }
-  const s = String(v).trim();
-  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return `${m[1]}-${pad2(+m[2])}-${pad2(+m[3])}`;
-  m = s.match(/^(\d{1,2})[\/\-. ](\d{1,2})[\/\-. ](\d{2,4})/); if (m) { const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; if (+m[2] >= 1 && +m[2] <= 12 && +m[1] <= 31) return `${y}-${pad2(+m[2])}-${pad2(+m[1])}`; }
-  m = s.match(/^(\d{1,2})[\-\/ ]([A-Za-z]{3})[A-Za-z]*[\-\/ ,]+(\d{2,4})/); if (m) { const mo = MON3.indexOf(m[2].toLowerCase()); const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; if (mo >= 0) return `${y}-${pad2(mo + 1)}-${pad2(+m[1])}`; }
-  return null;
-}
-function parseBankAmt(v) {
-  if (v == null || v === '') return null;
-  if (typeof v === 'number') return v;
-  let s = String(v).replace(/[₹,\s]|INR|Rs\.?/gi, ''); if (!s || s === '-') return null;
-  let sign = 1; if (/^\(.*\)$/.test(s)) { sign = -1; s = s.slice(1, -1); }
-  if (/dr$/i.test(s)) { sign = -1; s = s.slice(0, -2); } else if (/cr$/i.test(s)) s = s.slice(0, -2);
-  const n = parseFloat(s); return isNaN(n) ? null : sign * n;
-}
-function extractLines(rows, L) {
-  const m = L.map, out = [];
-  for (let i = L.headerRow + 1; i < rows.length; i++) {
-    const r = rows[i]; const date = parseBankDate(r[m.date]); if (!date) continue;
-    const narration = String(r[m.narration] ?? '').replace(/\s+/g, ' ').trim();
-    let debit = 0, credit = 0;
-    if (m.debit != null && m.credit != null) { debit = Math.abs(parseBankAmt(r[m.debit]) || 0); credit = Math.abs(parseBankAmt(r[m.credit]) || 0); }
-    else { const a = parseBankAmt(r[m.amount]); if (a == null) continue; const t = m.drcr != null ? String(r[m.drcr]).toLowerCase() : ''; if (/^d/.test(t) || (!t && a < 0)) debit = Math.abs(a); else credit = Math.abs(a); }
-    if (!debit && !credit) continue;
-    const bal = m.balance != null ? parseBankAmt(r[m.balance]) : null;
-    out.push({ date, narration, ref: m.ref != null ? String(r[m.ref] ?? '').trim().replace(/^0+$/, '') : '', debit: r2(debit), credit: r2(credit), balance: bal });
-  }
-  return out;
-}
-const lineHash = (acc, l) => [acc, l.date, l.debit, l.credit, l.narration.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60), l.ref].join('|');
-
-/* ---------- import flow ---------- */
-async function importStatement(file, accountId) {
-  if (!api.can('bank.import')) return toast('Not allowed for your role', 'error');
-  let rows; try { rows = await readSheetRows(file); } catch (err) { return toast(err.message, 'error'); }
-  if (!rows.length) return toast('That file is empty', 'error');
-  featureSettings();
-  const saved = Store.data.settings.bankMaps[accountId];
-  let L = detectLayout(rows);
-  if (!L && saved) L = { ...saved, headerRow: findHeader(rows, saved) };
-  if (!L || L.headerRow < 0) return mapColumns(rows, accountId, file.name);
-  previewImport(rows, L, accountId, file.name);
-}
-function findHeader(rows, saved) { for (let i = 0; i < Math.min(rows.length, 40); i++) if (rows[i].map(c => String(c).toLowerCase().replace(/\s+/g, ' ').trim()).filter(Boolean).join('|') === saved.sig) return i; return saved.headerRow ?? -1; }
-function mapColumns(rows, accountId, fileName) {
-  const width = Math.max(...rows.slice(0, 40).map(r => r.length));
-  const M = { headerRow: 0, map: {} };
-  const ov = openModal(`<div class="modal-h"><h2>Match the columns</h2><span class="muted" style="font-size:12.5px">${esc(fileName)}</span></div><div class="modal-b" id="bmBody"></div>
-    <div class="modal-f"><button class="btn" data-b="no">Cancel</button><button class="btn btn-gold" data-b="yes">Continue</button></div>`, 'xl');
-  const body = $('#bmBody', ov);
-  const draw = () => {
-    const hdr = rows[M.headerRow] || [];
-    const colOpts = sel => '<option value="">—</option>' + Array.from({ length: width }, (_, i) => `<option value="${i}"${+sel === i && sel !== '' && sel != null ? ' selected' : ''}>${esc(String(hdr[i] || 'Column ' + (i + 1)).slice(0, 40))}</option>`).join('');
-    body.innerHTML = `<div class="notice info" style="margin-bottom:14px">${icon('info')}<div>The app couldn't recognise this layout. Pick the header row and tell it which column is which. It remembers this for <b>${esc(nameOf('accounts', accountId))}</b>.</div></div>
-      <div class="fgrid c4"><div class="field span2"><label>Header row</label><select class="select" data-bm="headerRow">${rows.slice(0, 40).map((r, i) => `<option value="${i}"${i === M.headerRow ? ' selected' : ''}>Row ${i + 1}: ${esc(r.filter(Boolean).slice(0, 5).join(' · ').slice(0, 70))}</option>`).join('')}</select></div>
-      ${BANK_FIELDS.map(([k, l]) => `<div class="field"><label>${l}</label><select class="select" data-bm="${k}">${colOpts(M.map[k])}</select></div>`).join('')}</div>
-      <div class="hint" style="margin:6px 0 14px">Use either Withdrawal + Deposit columns, or one Amount column (with a Dr/Cr column, or negative numbers for withdrawals).</div>
-      <div class="tbl-wrap" style="max-height:260px;border:1px solid var(--line);border-radius:10px"><table class="tbl" style="font-size:12px"><tbody>${rows.slice(M.headerRow, M.headerRow + 8).map((r, i) => `<tr style="${i === 0 ? 'font-weight:600;background:var(--surface-2)' : ''}">${Array.from({ length: width }, (_, c) => `<td style="white-space:nowrap">${esc(String(r[c] ?? '').slice(0, 30))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
-  };
-  draw();
-  body.addEventListener('change', ev => { const el = ev.target.closest('[data-bm]'); if (!el) return; if (el.dataset.bm === 'headerRow') M.headerRow = +el.value; else if (el.value === '') delete M.map[el.dataset.bm]; else M.map[el.dataset.bm] = +el.value; draw(); });
-  ov.addEventListener('click', ev => {
-    const b = ev.target.closest('[data-b]'); if (!b) return;
-    if (b.dataset.b === 'no') return ov.remove();
-    const m = M.map; if (m.date == null || m.narration == null || !((m.debit != null && m.credit != null) || m.amount != null)) return toast('Pick Date, Narration and either Withdrawal + Deposit or Amount', 'error');
-    const L = { headerRow: M.headerRow, map: { ...m }, bank: 'Custom layout', sig: (rows[M.headerRow] || []).map(c => String(c).toLowerCase().replace(/\s+/g, ' ').trim()).filter(Boolean).join('|') };
-    if (!extractLines(rows, L).length) return toast('No rows with a valid date and amount under that header — check the columns', 'error');
-    ov.remove(); previewImport(rows, L, accountId, fileName);
-  });
-}
-function previewImport(rows, L, accountId, fileName) {
-  const lines = extractLines(rows, L);
-  if (!lines.length) return toast('No transactions found in this file', 'error');
-  const existing = new Set(Store.data.bankLines.filter(x => x.accountId === accountId && !x.deleted).map(x => x.hash));
-  const fresh = [], seen = new Set(); let dupes = 0;
-  for (const l of lines) { const h = lineHash(accountId, l); if (existing.has(h) || seen.has(h)) { dupes++; continue; } seen.add(h); fresh.push({ ...l, hash: h }); }
-  const dates = lines.map(l => l.date).sort(); const from = dates[0], to = dates[dates.length - 1];
-  const withBal = lines.filter(l => l.balance != null); const closing = withBal.length ? (lines[0].date <= lines[lines.length - 1].date ? withBal[withBal.length - 1] : withBal[0]).balance : null;
-  const dr = sum(fresh, l => l.debit), cr = sum(fresh, l => l.credit);
-  const ov = openModal(`<div class="modal-h"><h2>Import statement</h2></div><div class="modal-b">
-    <div class="bk-prev"><div><span>Account</span><b>${esc(nameOf('accounts', accountId))}</b></div><div><span>File</span><b>${esc(fileName)}</b><em>${esc(L.bank)}</em></div><div><span>Period</span><b>${fmtDate(from)} – ${fmtDate(to)}</b></div>
-    <div><span>New lines</span><b>${fresh.length}</b>${dupes ? `<em>${dupes} already imported, skipped</em>` : ''}</div><div><span>Withdrawals</span><b class="out">${money(dr)}</b></div><div><span>Deposits</span><b class="in">${money(cr)}</b></div>${closing != null ? `<div><span>Closing balance</span><b>${money(closing)}</b></div>` : ''}</div>
-    ${fresh.length ? '<div class="hint" style="margin-top:12px">After import the app matches each line to your entries. Nothing is added to the books until you confirm it.</div>' : '<div class="notice" style="margin-top:12px">Every line in this file is already imported.</div>'}</div>
-    <div class="modal-f"><button class="btn" data-b="no">Cancel</button>${fresh.length ? `<button class="btn btn-gold" data-b="yes">Import ${fresh.length} lines</button>` : ''}</div>`, 'sm');
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-b]'); if (!b) return; if (b.dataset.b === 'no') return ov.remove();
-    b.disabled = true;
-    featureSettings();
-    if (L.bank === 'Custom layout') Store.data.settings.bankMaps[accountId] = { map: L.map, sig: L.sig, headerRow: L.headerRow, bank: L.bank };
-    const imp = { id: uid('bi'), accountId, fileName, layout: L.bank, from, to, count: fresh.length, dupes, closing, closingDate: to, createdBy: api.me().id, createdAt: nowISO() };
-    Store.data.bankImports.push(imp);
-    fresh.forEach(l => Store.data.bankLines.push({ id: uid('bl'), importId: imp.id, accountId, ...l, status: 'open', entryId: null, how: null }));
-    api.log('create', 'bankImports', imp.id, `Imported ${fresh.length} lines · ${nameOf('accounts', accountId)} · ${fmtDate(from)}–${fmtDate(to)}`);
-    const n = autoMatch(accountId);
-    Store.persist(); ov.remove();
-    S.bank.acc = accountId; S.bank.tab = 'review';
-    if (S.page !== 'bank') location.hash = '#/bank'; else render();
-    toast(`Imported ${fresh.length} lines · ${n} matched automatically`);
-  });
-}
-
-/* ---------- matching ---------- */
-const BANK_NOISE = new Set('neft rtgs imps upi ach nach dr cr inb ib mb netbank net bank tpt trf transfer to from by ref chq cheque clg clearing ft fund pos atm int mum mumbai pvt ltd limited private india the and of for payment pay paid hdfc icici sbi axis kotak bank a c ac acct account no utr txn self mob mobile online inr rs'.split(' '));
-const normTxt = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-const tokensOf = s => normTxt(s).split(' ').filter(t => t.length >= 3 && !/^\d+$/.test(t) && !BANK_NOISE.has(t));
-const lineDir = l => l.debit > 0 ? 'out' : 'in';
-const lineAmt = l => l.debit || l.credit;
-const lineEntry = l => { const e = l.entryId ? api.get('entries', l.entryId) : null; return e && !e.deleted ? e : null; };
-const lineStatus = l => l.status === 'ignored' ? 'ignored' : lineEntry(l) ? 'matched' : 'open';
-function entryFitsLine(e, l) {
-  const acc = l.accountId, d = lineDir(l);
-  if (d === 'out' && !((e.type === 'outflow' || e.type === 'transfer') && e.accountId === acc)) return false;
-  if (d === 'in' && !((e.type === 'inflow' && e.accountId === acc) || (e.type === 'transfer' && e.toAccountId === acc))) return false;
-  return Math.abs(e.amount - lineAmt(l)) < 1 && Math.abs(diffDays(e.date, l.date)) <= 7;
-}
-function partyTokens(p) { return tokensOf(p.name).filter(t => t.length >= 4); }
-function scoreEntry(e, l) {
-  const txt = normTxt(l.narration + ' ' + l.ref); let sc = 100 - 6 * Math.abs(diffDays(e.date, l.date));
-  const refDigits = String(e.txnRef || '').replace(/\D/g, ''); if (refDigits.length >= 6 && txt.replace(/\s/g, '').includes(refDigits.slice(-8))) sc += 45;
-  const p = api.get('parties', e.partyId); if (p && partyTokens(p).some(t => txt.includes(t))) sc += 25;
-  return sc;
-}
-/** Entries already linked on this account's statement (a transfer can be linked once on each account). */
-function usedEntryIds(acc, exceptLine) { return new Set(Store.data.bankLines.filter(x => !x.deleted && x.accountId === acc && x !== exceptLine && x.status !== 'ignored' && x.entryId).map(x => x.entryId)); }
-function entryCandidates(l, used) {
-  used = used || usedEntryIds(l.accountId, l);
-  return Calc.live().filter(e => !used.has(e.id) && entryFitsLine(e, l)).map(e => ({ e, score: scoreEntry(e, l) })).sort((a, b) => b.score - a.score);
-}
-/** Link every line that has one clear match. Returns how many were linked. */
-function autoMatch(accountId) {
-  const used = usedEntryIds(accountId, null); let n = 0;
-  const open = Store.data.bankLines.filter(l => !l.deleted && l.accountId === accountId && lineStatus(l) === 'open').sort((a, b) => a.date.localeCompare(b.date));
-  for (const l of open) {
-    const c = entryCandidates(l, used);
-    if (c.length && c[0].score >= 70 && (c.length === 1 || c[0].score - c[1].score >= 25)) { l.entryId = c[0].e.id; l.status = 'matched'; l.how = 'auto'; l.matchedAt = nowISO(); used.add(c[0].e.id); n++; }
-  }
-  if (n) Store.persist();
-  return n;
-}
-function ruleFor(l) {
-  const txt = ' ' + normTxt(l.narration) + ' ';
-  return (Store.data.settings.bankRules || []).find(r => r.key.split(' ').every(k => txt.includes(' ' + k + ' ')));
-}
-function learnRule(l, partyId) {
-  const p = api.get('parties', partyId); if (!p) return;
-  const txt = normTxt(l.narration);
-  if (partyTokens(p).some(t => txt.includes(t))) return; // name is already in the narration
-  const toks = tokensOf(l.narration).filter(t => !/^[a-z]{4}0[a-z0-9]{6}$/.test(t)).slice(0, 2); if (!toks.length) return;
-  const key = toks.join(' ');
-  const rules = Store.data.settings.bankRules; const ex = rules.find(r => r.key === key);
-  if (ex) ex.partyId = partyId; else rules.push({ key, partyId, createdAt: nowISO() });
-}
-function guessParty(l) {
-  const r = ruleFor(l); if (r && api.get('parties', r.partyId)) return { p: api.get('parties', r.partyId), why: 'learned from "' + r.key + '"' };
-  const txt = normTxt(l.narration); const d = lineDir(l);
-  const kinds = d === 'out' ? ['vendor', 'employee', 'other'] : ['client', 'other'];
-  let best = null;
-  for (const p of api.list('parties').filter(p => p.active && kinds.includes(p.kind))) {
-    const toks = partyTokens(p); if (!toks.length) continue;
-    const hit = toks.filter(t => txt.includes(t)).length; if (!hit) continue;
-    const sc = hit / toks.length + (txt.includes(toks[0]) ? 0.5 : 0);
-    if (!best || sc > best.sc) best = { p, sc };
-  }
-  return best && best.sc >= 0.5 ? { p: best.p, why: 'name in narration' } : null;
-}
-const MODE_RX = [['UPI', /\bupi\b/i], ['IMPS', /\bimps\b/i], ['RTGS', /\brtgs\b/i], ['NEFT', /\bneft\b/i], ['Cheque', /\bchq\b|cheque|\bclg\b/i], ['Auto-debit', /\bach\b|\bnach\b|\bsi\b|auto ?debit|ecs/i], ['Card', /\bpos\b|card/i]];
-const modeOf = l => (MODE_RX.find(([, rx]) => rx.test(l.narration)) || ['NEFT'])[0];
-const refOf = l => { const m = (l.narration + ' ' + l.ref).match(/\b([A-Z]{0,5}\d{8,22})\b/); return l.ref || (m ? m[1] : ''); };
-/** Everything the app can propose for an unmatched line, best first. */
-function suggestionsFor(l) {
-  const out = [], amt = lineAmt(l), d = lineDir(l);
-  entryCandidates(l).slice(0, 3).forEach(({ e, score }) => out.push({ t: 'entry', conf: score >= 70 ? 'high' : 'med', label: 'Match ' + entryTitle(e), sub: `${fmtDate(e.date)} · ${money(e.amount)}${e.txnRef ? ' · ' + e.txnRef : ''}`, entryId: e.id }));
-  // recurring items not yet confirmed
-  const pend = Calc.pendingRecurring(addDays(l.date, 12)).filter(p => p.rec.accountId === l.accountId && (p.rec.type === 'outflow') === (d === 'out') && Math.abs(diffDays(p.dueDate, l.date)) <= 12);
-  pend.map(p => ({ p, diff: Math.abs(p.net - amt) })).filter(x => x.diff < 1 || (x.p.rec.variable && x.diff <= Math.max(500, x.p.net * 0.35))).sort((a, b) => a.diff - b.diff).slice(0, 2)
-    .forEach(({ p, diff }) => out.push({ t: 'recurring', conf: diff < 1 ? 'high' : 'med', label: 'Confirm ' + p.rec.name + ' · ' + monthLabel(p.period, true), sub: diff < 1 ? 'Amount matches the template' : `Template ${money(p.net)} · bank ${money(amt)} (variable bill)`, recId: p.rec.id, period: p.period, dueDate: p.dueDate }));
-  // client receipt against an unpaid PI
-  if (d === 'in') {
-    const g = guessParty(l);
-    api.list('pis').filter(p => p.status !== 'cancelled').map(p => ({ p, st: Sales.piState(p) })).filter(x => x.st.outstanding > 0).forEach(({ p, st }) => {
-      const tax = st.outstandingTaxable || p.taxable, expNet = r2(tax * (1 + (+p.gstRate || 0) / 100 - (+p.tdsRate || 0) / 100));
-      const nameHit = g && g.p.id === p.clientId;
-      if (Math.abs(expNet - amt) < 1 || (nameHit && amt < expNet)) out.push({ t: 'pi', conf: Math.abs(expNet - amt) < 1 ? 'high' : 'med', label: 'Receipt against ' + p.piNo.split('/').slice(-2).join('/') + ' · ' + nameOf('parties', p.clientId), sub: Math.abs(expNet - amt) < 1 ? `Expected ${money(expNet)} after TDS — exact` : `Part payment of ${money(expNet)} expected`, piId: p.id, exact: Math.abs(expNet - amt) < 1 });
-    });
-  }
-  // transfer between own accounts
-  const txt = normTxt(l.narration);
-  const other = api.list('accounts').find(a => a.id !== l.accountId && a.active && a.number && txt.includes(String(a.number).replace(/\D/g, '')));
-  if (other || /\bsweep|\bown a ?c|\bself\b|fd booking|fixed deposit|\bto fd\b/.test(txt)) {
-    const o = other || api.list('accounts').find(a => a.id !== l.accountId && (/fd|fixed/i.test(a.name + a.type) ? /fd|fixed/.test(txt) : true));
-    if (o) out.push({ t: 'transfer', conf: other ? 'high' : 'med', label: (d === 'out' ? 'Transfer to ' : 'Transfer from ') + o.name, sub: 'Between your own accounts', otherId: o.id });
-  }
-  // a known party: quick add from their last entry, or open the form
-  const g = guessParty(l);
-  if (g) {
-    const kind = g.p.kind === 'client' ? 'client' : g.p.kind === 'vendor' ? 'vendor' : g.p.kind === 'employee' ? 'employee' : (d === 'out' ? 'other_out' : 'other_in');
-    const last = lastEntry(e => e.partyId === g.p.id && e.type === (d === 'out' ? 'outflow' : 'inflow'));
-    if (last && kind !== 'client') out.push({ t: 'quick', conf: g.why.startsWith('learned') ? 'high' : 'med', label: `Add as ${nameOf('categories', last.categoryId)} · ${g.p.name}`, sub: `Same as ${fmtDate(last.date)}: ${nameOf('departments', last.departmentId)}${+last.gstRate ? ' · GST ' + last.gstRate + '%' : ''}${+last.tdsRate ? ' · TDS ' + last.tdsRate + '%' : ''} · ${g.why}`, partyId: g.p.id, lastId: last.id, kind });
-    out.push({ t: 'draft', conf: 'low', label: `New ${KIND[kind].label.toLowerCase()} entry · ${g.p.name}`, sub: 'Opens the form with the party and amount filled', partyId: g.p.id, kind });
-  }
-  // bank charges / interest
-  if (d === 'out' && /charge|chgs|\bfee\b|sms|annual|gst on|commission|chrg/.test(txt)) {
-    const bp = api.list('parties').find(p => p.kind === 'other' && /bank/i.test(p.name)); const last = lastEntry(e => e.categoryId === 'cat_bank');
-    out.push({ t: 'quick', conf: 'high', label: 'Add as Bank Charges', sub: 'Looks like a bank fee', partyId: bp ? bp.id : (last ? last.partyId : ''), lastId: last ? last.id : null, kind: 'other_out', categoryId: 'cat_bank' });
-  }
-  if (d === 'in' && /\bint\b|interest|int pd|int\.? cr/.test(txt)) {
-    const last = lastEntry(e => e.categoryId === 'cat_fdint');
-    out.push({ t: 'quick', conf: 'med', label: 'Add as Interest income', sub: 'Looks like bank / FD interest', partyId: last ? last.partyId : '', lastId: last ? last.id : null, kind: 'other_in', categoryId: 'cat_fdint' });
-  }
-  if (!out.length) out.push({ t: 'draft', conf: 'low', label: d === 'out' ? 'Not recognised — record a payment' : 'Not recognised — record a receipt', sub: 'Pick what it was; date, amount and reference are filled', kind: null });
-  return out;
-}
-
-/* ---------- actions ---------- */
-async function linkLine(l, entryId, how) { l.entryId = entryId; l.status = 'matched'; l.how = how; l.matchedAt = nowISO(); l.matchedBy = api.me().id; const e = api.get('entries', entryId); if (e && e.partyId && ['manual', 'created', 'quick'].includes(how)) learnRule(l, e.partyId); api.log('update', 'bankLines', l.id, `Bank line ${fmtDate(l.date)} ${money(lineAmt(l))} matched to ${e ? describe('entries', e) : entryId}`); Store.persist(); }
-async function quickCreate(l, sg) {
-  const last = sg.lastId ? api.get('entries', sg.lastId) : null, d = lineDir(l), amt = lineAmt(l);
-  const gr = last ? +last.gstRate || 0 : 0, tr = last ? +last.tdsRate || 0 : 0;
-  const taxable = taxableForNet(amt, gr, tr);
-  const input = { type: d === 'out' ? 'outflow' : 'inflow', date: l.date, categoryId: sg.categoryId || (last && last.categoryId) || '', departmentId: (last && last.departmentId) || (api.get('parties', sg.partyId) || {}).departmentId || 'dep_fin', partyId: sg.partyId || '', projectId: '', description: last ? last.description : (sg.categoryId === 'cat_bank' ? 'Bank charges' : ''), refNo: '', taxable, gstType: gr ? last.gstType : 'none', gstRate: gr, gstAmount: r2(taxable * gr / 100), itc: last ? last.itc : false, tdsRate: tr, tdsAmount: r2(taxable * tr / 100), amount: amt, paymentMode: modeOf(l), accountId: l.accountId, txnRef: refOf(l), notes: 'From bank statement: ' + l.narration, attachments: [] };
-  { const diff = r2(amt - (input.taxable + input.gstAmount - input.tdsAmount)); if (diff && Math.abs(diff) <= 0.05 && gr) input.gstAmount = r2(input.gstAmount + diff); }
-  const errs = api.validateEntry(api.normaliseEntry(input));
-  if (Object.keys(errs).length) { openFromLine(l, sg); return null; }
-  const saved = await api.saveEntry(input, null); await linkLine(l, saved.id, 'quick'); return saved;
-}
-function openFromLine(l, sg) {
-  const d = lineDir(l), amt = lineAmt(l);
-  const kind = sg && sg.kind ? sg.kind : null;
-  const preset = { type: d === 'out' ? 'outflow' : 'inflow', date: l.date, accountId: l.accountId, txnRef: refOf(l), paymentMode: modeOf(l), netAmount: amt };
-  if (sg && sg.partyId) { preset.partyId = sg.partyId; preset.partyKind = (api.get('parties', sg.partyId) || {}).kind; }
-  const note = `From bank: <b>${fmtDate(l.date)}</b> · ${money(amt)} ${d === 'out' ? 'paid' : 'received'} · <span class="mono" style="font-size:12px">${esc(l.narration.slice(0, 90))}</span>`;
-  openEntryForm({ kind, preset, note, onSaved: async saved => { if (Math.abs(saved.amount - amt) >= 1) toast(`Saved, but the net amount ${money(saved.amount)} differs from the bank ${money(amt)} — not linked`, 'error'); else { await linkLine(l, saved.id, 'created'); toast('Entry saved and matched to the bank line'); } } });
-}
-async function applySuggestion(l, sg) {
-  if (sg.t === 'entry') { await linkLine(l, sg.entryId, 'manual'); toast('Matched'); return; }
-  if (sg.t === 'quick') { const s2 = await quickCreate(l, sg); if (s2) toast('Added ' + money(s2.amount) + ' and matched'); return; }
-  if (sg.t === 'recurring') {
-    const rec = api.get('recurring', sg.recId); const amt = lineAmt(l);
-    const taxable = taxableForNet(amt, rec.gstRate, rec.tdsRate);
-    const e = entryFromRecurring(rec, sg.period, l.date, taxable); e.txnRef = refOf(l) || e.txnRef; e.paymentMode = modeOf(l) || e.paymentMode;
-    const saved = await api.saveEntry(e, null); await linkLine(l, saved.id, 'recurring'); toast('Confirmed ' + rec.name + ' and matched'); return;
-  }
-  if (sg.t === 'pi') {
-    const pi = api.get('pis', sg.piId);
-    if (sg.exact) {
-      const st = Sales.piState(pi); const o = Sales.orderOfPI(pi); const tax = st.outstandingTaxable || pi.taxable;
-      const input = { piId: pi.id, type: 'inflow', date: l.date, categoryId: catForPI(pi), departmentId: o ? o.departmentId : 'dep_design', partyId: pi.clientId, projectId: pi.projectId || '', description: pi.milestone, refNo: pi.taxInvoiceNo || pi.piNo, taxable: tax, gstType: pi.gstType, gstRate: pi.gstRate, gstAmount: r2(tax * pi.gstRate / 100), itc: false, tdsRate: pi.tdsRate, tdsAmount: r2(tax * pi.tdsRate / 100), paymentMode: modeOf(l), accountId: l.accountId, txnRef: refOf(l), notes: '', attachments: [] };
-      input.amount = r2(input.taxable + input.gstAmount - input.tdsAmount);
-      const saved = await api.saveEntry(input, null); await linkLine(l, saved.id, 'pi'); toast('Receipt recorded against ' + pi.piNo + ' and matched'); return;
-    }
-    const note = `From bank: <b>${fmtDate(l.date)}</b> · ${money(lineAmt(l))} received · part payment against ${esc(pi.piNo)}`;
-    const o = Sales.orderOfPI(pi), amt = lineAmt(l);
-    openEntryForm({ preset: { type: 'inflow', partyKind: 'client', partyId: pi.clientId, projectId: pi.projectId, piId: pi.id, categoryId: catForPI(pi), departmentId: o ? o.departmentId : '', gstRate: pi.gstRate, gstType: pi.gstType, tdsRate: pi.tdsRate, refNo: pi.taxInvoiceNo || pi.piNo, description: pi.milestone, date: l.date, accountId: l.accountId, txnRef: refOf(l), paymentMode: modeOf(l), netAmount: amt }, note, onSaved: async saved => { await linkLine(l, saved.id, 'created'); } });
-    return;
-  }
-  if (sg.t === 'transfer') {
-    const d = lineDir(l), amt = lineAmt(l);
-    const input = { type: 'transfer', date: l.date, amount: amt, taxable: amt, accountId: d === 'out' ? l.accountId : sg.otherId, toAccountId: d === 'out' ? sg.otherId : l.accountId, paymentMode: modeOf(l), txnRef: refOf(l), description: 'Transfer · from bank statement', notes: '', attachments: [] };
-    const saved = await api.saveEntry(input, null); await linkLine(l, saved.id, 'created'); toast('Transfer recorded and matched'); return;
-  }
-  if (sg.t === 'draft') openFromLine(l, sg);
-}
-
-/* ---------- page ---------- */
-function bankAccounts() { return api.list('accounts').filter(a => a.type === 'bank' && a.active); }
-function bankData(acc) {
-  const lines = Store.data.bankLines.filter(l => !l.deleted && l.accountId === acc);
-  const imps = Store.data.bankImports.filter(i => !i.deleted && i.accountId === acc).sort((a, b) => a.to.localeCompare(b.to));
-  const st = { open: [], matched: [], ignored: [] }; lines.forEach(l => st[lineStatus(l)].push(l));
-  const from = lines.length ? lines.reduce((m, l) => l.date < m ? l.date : m, lines[0].date) : null, to = lines.length ? lines.reduce((m, l) => l.date > m ? l.date : m, lines[0].date) : null;
-  const linked = new Set(lines.filter(l => lineStatus(l) === 'matched').map(l => l.entryId));
-  const notInBank = from ? Calc.live().filter(e => e.date >= from && e.date <= to && !linked.has(e.id) && e.paymentMode !== 'Cash' && ((e.type !== 'transfer' && e.accountId === acc) || (e.type === 'transfer' && (e.accountId === acc || e.toAccountId === acc)))).sort((a, b) => b.date.localeCompare(a.date)) : [];
-  const last = imps[imps.length - 1];
-  const closing = last && last.closing != null ? { amt: last.closing, date: last.closingDate } : null;
-  const book = closing ? Calc.balance(acc, closing.date) : null;
-  return { lines, imps, st, from, to, notInBank, closing, book };
-}
-PAGES.bank = {
-  title: 'Bank reconciliation',
-  render() {
-    featureSettings();
-    const accs = bankAccounts(); if (!accs.length) return `<div class="card"><div class="empty"><b>No bank accounts</b>Add one in Masters › Bank accounts.</div></div>`;
-    if (!accs.some(a => a.id === S.bank.acc)) S.bank.acc = accs[0].id;
-    const acc = S.bank.acc, D = bankData(acc), can = api.can('bank.match');
-    const pctM = D.lines.length ? Math.round(100 * D.st.matched.length / Math.max(1, D.lines.length - D.st.ignored.length)) : 0;
-    const diff = D.closing ? r2(D.closing.amt - D.book) : null;
-    const openNet = sum(D.st.open, l => l.credit - l.debit), nibNet = sum(D.notInBank, e => e.type === 'inflow' || (e.type === 'transfer' && e.toAccountId === acc) ? e.amount : -e.amount);
-    const unexpl = diff == null ? null : r2(diff - openNet + nibNet);
-    const head = `<div class="bk-bar"><div class="seg">${accs.map(a => `<button class="${a.id === acc ? 'on' : ''}" data-act="bk-acc" data-id="${a.id}">${esc(a.name)}<span class="faint"> ${esc(a.number || '')}</span>${Store.data.bankLines.some(l => !l.deleted && l.accountId === a.id && lineStatus(l) === 'open') ? ` <span class="tw-n">${Store.data.bankLines.filter(l => !l.deleted && l.accountId === a.id && lineStatus(l) === 'open').length}</span>` : ''}</button>`).join('')}</div>
-      <span class="spacer"></span>${api.can('bank.import') ? `<button class="btn btn-sm" data-act="bk-sample">${icon('bolt')} Try a sample statement</button><label class="btn btn-gold">${icon('upload')} Import statement<input type="file" id="bkFile" accept=".csv,.xls,.xlsx,.txt" style="display:none"></label>` : ''}</div>`;
-    if (!D.lines.length) return head + `<div class="card"><div class="empty" style="padding:44px 20px"><b>No statement imported for ${esc(nameOf('accounts', acc))}</b>
-      Download the account statement from net banking as <b>Excel or CSV</b> and import it here. HDFC and ICICI layouts are recognised automatically; for other banks you match the columns once.<br><br>Each line is matched to your entries. What isn't in the books yet is offered as a ready-made entry: recurring items, receipts against PIs, transfers, bank charges, and parties the app recognises from the narration.</div></div>`;
-    const kpis = `<div class="grid g-kpi bk-kpis">
-      <div class="card kpi"><div class="k-l">Statement period</div><div class="k-v" style="font-size:15px;white-space:normal;line-height:1.3">${fmtDate(D.from)} –<br>${fmtDate(D.to)}</div><div class="k-s">${D.lines.length} lines · ${D.imps.length} import${D.imps.length > 1 ? 's' : ''}</div></div>
-      <div class="card kpi"><div class="k-l">Matched</div><div class="k-v in">${pctM}%</div><div class="k-s">${D.st.matched.length} lines</div></div>
-      <div class="card kpi ${D.st.open.length ? 'warn' : ''}"><div class="k-l">To review</div><div class="k-v ${D.st.open.length ? 'out' : ''}">${D.st.open.length}</div><div class="k-s">${money(sum(D.st.open, l => l.debit))} out · ${money(sum(D.st.open, l => l.credit))} in</div></div>
-      <div class="card kpi"><div class="k-l">In books, not in bank</div><div class="k-v">${D.notInBank.length}</div><div class="k-s">${money(sum(D.notInBank, e => e.amount))}</div></div>
-      <div class="card kpi"><div class="k-l">Bank vs books</div><div class="k-v ${diff == null ? '' : Math.abs(diff) < 1 ? 'in' : 'out'}">${diff == null ? '—' : Math.abs(diff) < 1 ? 'Balanced' : money(diff, { sign: true })}</div><div class="k-s">${D.closing ? `Bank ${money(D.closing.amt)} · books ${money(D.book)} on ${fmtDate(D.closing.date)}${Math.abs(diff) >= 1 ? (Math.abs(unexpl) < 1 ? ' · fully explained by the lines below' : ` · <b class="out">${money(unexpl, { sign: true })} unexplained</b>`) : ''}` : 'No balance column in the file'}</div></div></div>`;
-    const T = S.bank.tab;
-    const tabs = `<div class="tabs" style="margin-top:4px">${[['review', 'To review', D.st.open.length], ['matched', 'Matched', D.st.matched.length], ['notinbank', 'Not in bank', D.notInBank.length], ['ignored', 'Ignored', D.st.ignored.length], ['imports', 'Imports', D.imps.length]].map(([k, l, n]) => `<button class="${T === k ? 'on' : ''}" data-act="bk-tab" data-v="${k}">${l} <span class="tw-n">${n}</span></button>`).join('')}</div>`;
-    const amtCell = l => `<span class="num ${l.debit ? 'out' : 'in'}" style="font-weight:600">${l.debit ? '−' + money(l.debit) : '+' + money(l.credit)}</span>`;
-    const lineCell = l => `<div class="bk-date">${fmtDate(l.date)}</div><div class="bk-narr" title="${esc(l.narration)}">${esc(l.narration)}</div>${l.ref ? `<div class="bk-ref mono">${esc(l.ref)}</div>` : ''}`;
-    let body = '';
-    if (T === 'review') {
-      const open = D.st.open.slice().sort((a, b) => b.date.localeCompare(a.date));
-      const ready = open.map(l => ({ l, sg: suggestionsFor(l) })).map(x => ({ ...x, best: x.sg.find(s => s.conf === 'high' && ['entry', 'recurring', 'quick', 'pi', 'transfer'].includes(s.t) && !(s.t === 'pi' && !s.exact)) }));
-      const nReady = ready.filter(x => x.best).length;
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Lines to review</h3><div class="sub">Newest first. Green suggestions are confident; one click adds or links them.</div></div>
-        ${can && nReady ? `<button class="btn btn-sm btn-navy" data-act="bk-accept-all">${icon('check')} Accept ${nReady} confident suggestion${nReady > 1 ? 's' : ''}</button>` : ''}${can ? `<button class="btn btn-sm" data-act="bk-rerun">Re-run matching</button>` : ''}</div>
-        ${ready.map(({ l, sg }) => `<div class="bk-row" data-line="${l.id}"><div class="bk-l">${lineCell(l)}</div><div class="bk-a">${amtCell(l)}</div>
-          <div class="bk-s">${sg.slice(0, 4).map((s, i) => `<div class="bk-sg ${s.conf}"><div class="grow"><div class="t">${esc(s.label)}</div><div class="s">${esc(s.sub)}</div></div>${can ? `<button class="btn btn-sm ${i === 0 && s.conf !== 'low' ? 'btn-gold' : ''}" data-act="bk-apply" data-id="${l.id}" data-i="${i}">${s.t === 'entry' ? 'Match' : s.t === 'draft' || (s.t === 'pi' && !s.exact) ? 'Review' : 'Add'}</button>` : ''}</div>`).join('')}
-          ${can ? `<div class="bk-more"><button class="ef-link" data-act="bk-pick" data-id="${l.id}">${icon('link').replace('<svg', '<svg style="width:13px;height:13px"')} Match to another entry</button><button class="ef-link" data-act="bk-apply" data-id="${l.id}" data-i="draft">New entry</button><button class="ef-link muted" data-act="bk-ignore" data-id="${l.id}">Ignore</button></div>` : ''}</div></div>`).join('') || `<div class="empty"><b>All lines are matched</b>Nothing left to review for this account.</div>`}</div>`;
-    } else if (T === 'matched') {
-      const rows = D.st.matched.slice().sort((a, b) => b.date.localeCompare(a.date));
-      const HOW = { auto: 'Auto', manual: 'Matched', created: 'Added', quick: 'Added', recurring: 'Recurring', pi: 'PI receipt' };
-      body = `<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Bank line</th><th class="num">Amount</th><th>Entry in books</th><th>How</th><th></th></tr></thead><tbody>
-        ${rows.map(l => { const e = lineEntry(l); return `<tr><td style="max-width:340px">${lineCell(l)}</td><td class="num">${amtCell(l)}</td><td><a href="#" data-act="open-entry" data-id="${e.id}">${esc(entryTitle(e))}</a><div class="cell-sub">${fmtDate(e.date)} · ${esc(entryParty(e) || '')}</div></td><td><span class="chip ${l.how === 'auto' ? 'inflow' : ''}">${HOW[l.how] || 'Matched'}</span></td><td>${can ? `<button class="btn btn-sm btn-ghost" data-act="bk-unmatch" data-id="${l.id}">Unmatch</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div></div>`;
-    } else if (T === 'notinbank') {
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Recorded in the books but not on the statement</h3><div class="sub">Between ${fmtDate(D.from)} and ${fmtDate(D.to)}. Usually cheques not yet cleared, a wrong account or date, or a duplicate entry.</div></div></div>
-        ${D.notInBank.map(e => entryListRow(e)).join('') || '<div class="empty"><b>Nothing missing</b>Every entry in this period is on the statement.</div>'}</div>`;
-    } else if (T === 'ignored') {
-      body = `<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Bank line</th><th class="num">Amount</th><th></th></tr></thead><tbody>${D.st.ignored.map(l => `<tr><td>${lineCell(l)}</td><td class="num">${amtCell(l)}</td><td>${can ? `<button class="btn btn-sm" data-act="bk-unignore" data-id="${l.id}">Restore</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">Nothing ignored.</div></td></tr>'}</tbody></table></div></div>`;
-    } else {
-      body = `<div class="card"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>File</th><th>Period</th><th class="num">Lines</th><th>Imported</th><th></th></tr></thead><tbody>${D.imps.slice().reverse().map(i => `<tr><td><div class="cell-main">${esc(i.fileName)}</div><div class="cell-sub">${esc(i.layout)}${i.dupes ? ' · ' + i.dupes + ' duplicates skipped' : ''}</div></td><td>${fmtDate(i.from)} – ${fmtDate(i.to)}</td><td class="num">${i.count}</td><td>${esc(userName(i.createdBy))} · ${fmtDateTime(i.createdAt)}</td><td>${api.can('bank.import') ? `<button class="btn btn-sm btn-ghost" data-act="bk-del-import" data-id="${i.id}">Remove</button>` : ''}</td></tr>`).join('')}</tbody></table></div></div>
-        ${(Store.data.settings.bankRules || []).length ? `<div class="card"><div class="card-h"><div class="grow"><h3>Narrations the app has learned</h3><div class="sub">When a narration contains these words, the line is suggested for that party</div></div></div><div class="tbl-wrap"><table class="tbl"><tbody>${Store.data.settings.bankRules.map((r, i) => `<tr><td class="mono">${esc(r.key)}</td><td>${esc(nameOf('parties', r.partyId))}</td><td>${can ? `<button class="btn btn-sm btn-ghost" data-act="bk-del-rule" data-i="${i}">Forget</button>` : ''}</td></tr>`).join('')}</tbody></table></div></div>` : ''}`;
-    }
-    return `<div class="stack">${head}${kpis}${tabs}${body}</div>`;
-  },
-};
-function pickEntryForLine(l) {
-  const amt = lineAmt(l), d = lineDir(l), used = usedEntryIds(l.accountId, l);
-  const pool = Calc.live().filter(e => !used.has(e.id) && Math.abs(diffDays(e.date, l.date)) <= 45 && (d === 'out' ? (e.type === 'outflow' || (e.type === 'transfer' && e.accountId === l.accountId)) : (e.type === 'inflow' || (e.type === 'transfer' && e.toAccountId === l.accountId)))).sort((a, b) => Math.abs(a.amount - amt) - Math.abs(b.amount - amt) || Math.abs(diffDays(a.date, l.date)) - Math.abs(diffDays(b.date, l.date))).slice(0, 12);
-  const ov = openModal(`<div class="modal-h"><h2>Match to an entry</h2><span class="muted" style="font-size:12.5px">${fmtDate(l.date)} · ${money(amt)}</span></div><div class="modal-b"><div class="hint" style="margin-bottom:10px">Closest amounts within 45 days. If the amount or account differs, edit the entry after matching.</div>
-    ${pool.map(e => `<div class="list-row" style="cursor:pointer" data-pick="${e.id}"><div class="type-ic ${e.type}">${icon(e.type === 'inflow' ? 'in' : e.type === 'outflow' ? 'out' : 'transfer')}</div><div class="grow"><div class="t">${esc(entryTitle(e))}</div><div class="s">${fmtDate(e.date)} · ${esc(nameOf('accounts', e.accountId))}${e.accountId !== l.accountId && e.toAccountId !== l.accountId ? ' <span class="out">· other account</span>' : ''}</div></div><div class="num ${Math.abs(e.amount - amt) < 1 ? 'in' : ''}">${money(e.amount)}</div></div>`).join('') || '<div class="empty">No entries nearby.</div>'}</div>
-    <div class="modal-f"><button class="btn" data-pick="">Cancel</button></div>`, 'sm');
-  ov.addEventListener('click', async ev => { const b = ev.target.closest('[data-pick]'); if (!b) return; ov.remove(); if (!b.dataset.pick) return; await linkLine(l, b.dataset.pick, 'manual'); toast('Matched'); render({ keepScroll: true }); });
-}
-/** A realistic HDFC-format CSV built from the books: most lines match, plus unrecorded recurring bills, a PI receipt, a transfer and bank charges. */
-function sampleStatementCSV(acc) {
-  const a = api.get('accounts', acc), from = addDays(TODAY, -40), to = addDays(TODAY, -1);
-  const es = Calc.live().filter(e => e.date >= from && e.date <= to && ((e.type !== 'transfer' && e.accountId === acc) || (e.type === 'transfer' && (e.accountId === acc || e.toAccountId === acc))) && e.paymentMode !== 'Cash').sort((x, y) => x.date.localeCompare(y.date));
-  const early = es.filter(e => e.type === 'outflow' && e.date <= addDays(to, -6) && !e.recurringId);
-  const skip = early.find(e => e.paymentMode === 'Cheque') || early[Math.floor(early.length / 2)];
-  const up = s => String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, '').slice(0, 26);
-  const rows = [];
-  es.forEach((e, i) => {
-    if (e === skip) return;
-    const out = e.type === 'outflow' || (e.type === 'transfer' && e.accountId === acc);
-    const who = e.type === 'transfer' ? (out ? 'TRF TO ' + up(nameOf('accounts', e.toAccountId)) : 'TRF FROM ' + up(nameOf('accounts', e.accountId))) : up(nameOf('parties', e.partyId));
-    const md = e.paymentMode, ref = String(e.txnRef || '').replace(/^\D+/, '');
-    const narr = md === 'UPI' ? `UPI-${who}-${ref.slice(0, 12)}` : md === 'Auto-debit' ? `ACH D- ${who}-${ref.slice(0, 10)}` : md === 'Cheque' ? `CHQ PAID-${who}` : md === 'IMPS' ? `IMPS-${ref.slice(0, 12)}-${who}` : `${md} ${out ? 'DR' : 'CR'}-${out ? 'ICIC0000104' : 'HDFC0000240'}-${who}-NETBANK, MUM-${e.txnRef || ''}`;
-    rows.push({ date: i % 5 === 0 ? addDays(e.date, 1) : e.date, narr, ref: md === 'Cheque' ? String(e.txnRef).replace(/\D/g, '') : '0000' + ref.slice(-12), dr: out ? e.amount : 0, cr: out ? 0 : e.amount });
-  });
-  Calc.pendingRecurring(to).filter(p => p.rec.accountId === acc && p.dueDate >= from && p.dueDate <= to).slice(0, 3).forEach(p => {
-    const amt = p.rec.variable ? r2(p.net * 1.08) : p.net; const pn = api.get('parties', p.rec.partyId);
-    rows.push({ date: p.dueDate > to ? to : p.dueDate, narr: p.rec.paymentMode === 'Auto-debit' ? `ACH D- ${up(pn && pn.name).split(' ')[0]} BILLDESK-${rint(1e9, 9e9)}` : `NEFT DR-HDFC0000001-${up(pn && pn.name)}-NETBANK, MUM-N${rint(1e9, 9e9)}${rint(100, 999)}`, ref: '', dr: p.rec.type === 'outflow' ? amt : 0, cr: p.rec.type === 'inflow' ? amt : 0 });
-  });
-  const pi = api.list('pis').filter(p => p.status !== 'cancelled').map(p => ({ p, st: Sales.piState(p) })).filter(x => x.st.outstanding > 0).sort((x, y) => x.p.dueDate.localeCompare(y.p.dueDate))[0];
-  if (pi && ((lastEntry(e => e.partyId === pi.p.clientId && e.type === 'inflow') || {}).accountId || 'acc_hdfc') === acc) { const tax = pi.st.outstandingTaxable || pi.p.taxable; const net = r2(tax * (1 + pi.p.gstRate / 100 - pi.p.tdsRate / 100)); rows.push({ date: addDays(to, -2), narr: `NEFT CR-CITI0000002-${up(nameOf('parties', pi.p.clientId))}-PAYMENT-CITIN${rint(1e7, 9e7)}`, ref: '', dr: 0, cr: net }); }
-  rows.push({ date: addDays(to, -6), narr: 'CHRG: NEFT/RTGS CHARGES INCL GST', ref: '', dr: 177, cr: 0 });
-  rows.push({ date: addDays(to, -1), narr: 'SMS ALERT CHGS QTR SEP26', ref: '', dr: 17.7, cr: 0 });
-  const other = api.list('accounts').find(x => x.id !== acc && x.type === 'bank');
-  if (other && acc === 'acc_hdfc') rows.push({ date: addDays(to, -4), narr: `FT - CR - ${String(other.number || '').replace(/\D/g, '')} - IUOVA DESIGN COMPANY SWEEP`, ref: '', dr: 0, cr: 125000 });
-  rows.sort((x, y) => x.date.localeCompare(y.date));
-  let bal = Calc.balance(acc, addDays(from, -1)); const fmt = d => `${d.slice(8)}/${d.slice(5, 7)}/${d.slice(2, 4)}`;
-  const csv = ['HDFC BANK Ltd.,,,,,,', `Account No : XXXXXXXX${String(a.number || '').replace(/\D/g, '')},,,,,,`, `Statement From : ${fmt(from)} To : ${fmt(to)},,,,,,`, ',,,,,,', 'Date,Narration,Chq./Ref.No.,Value Dt,Withdrawal Amt.,Deposit Amt.,Closing Balance'];
-  rows.forEach(r => { bal = r2(bal - r.dr + r.cr); csv.push([fmt(r.date), '"' + r.narr + '"', r.ref, fmt(r.date), r.dr ? r.dr.toFixed(2) : '', r.cr ? r.cr.toFixed(2) : '', bal.toFixed(2)].join(',')); });
-  csv.push(',,,,,,', 'STATEMENT SUMMARY :-,,,,,,');
-  return csv.join('\n');
-}
-Object.assign(ACT, {
-  'bk-acc': el => { S.bank.acc = el.dataset.id; render(); },
-  'bk-tab': el => { S.bank.tab = el.dataset.v; render({ keepScroll: true }); },
-  'bk-sample': () => { const acc = S.bank.acc || (bankAccounts()[0] || {}).id; const csv = sampleStatementCSV(acc); const f = new File([csv], 'Sample_HDFC_statement_' + TODAY + '.csv', { type: 'text/csv' }); importStatement(f, acc); },
-  'bk-apply': async el => {
-    const l = Store.data.bankLines.find(x => x.id === el.dataset.id); if (!l) return;
-    const sg = el.dataset.i === 'draft' ? { t: 'draft', kind: null } : suggestionsFor(l)[+el.dataset.i];
-    if (!sg) return;
-    el.disabled = true;
-    try { await applySuggestion(l, sg); render({ keepScroll: true }); } catch (err) { toast(err.message, 'error'); el.disabled = false; }
-  },
-  'bk-accept-all': async () => {
-    const acc = S.bank.acc; const open = Store.data.bankLines.filter(l => !l.deleted && l.accountId === acc && lineStatus(l) === 'open');
-    const list = open.map(l => ({ l, s: suggestionsFor(l).find(s => s.conf === 'high' && ['entry', 'recurring', 'quick', 'pi', 'transfer'].includes(s.t) && !(s.t === 'pi' && !s.exact)) })).filter(x => x.s);
-    if (!list.length) return;
-    if (!await confirmBox({ title: `Accept ${list.length} suggestions?`, body: `<div style="max-height:300px;overflow:auto">${list.map(x => `<div class="list-row" style="padding:6px 0"><div class="grow"><div class="t" style="font-size:13px">${esc(x.s.label)}</div><div class="s">${fmtDate(x.l.date)} · ${esc(x.l.narration.slice(0, 60))}</div></div><span class="num">${money(lineAmt(x.l))}</span></div>`).join('')}</div><div class="hint" style="margin-top:8px">Matches link existing entries; the rest add new entries dated as on the statement. Each one can be unmatched later.</div>`, ok: 'Accept all' })) return;
-    let n = 0; for (const x of list) { if (lineStatus(x.l) !== 'open') continue; const fresh = suggestionsFor(x.l).find(s => s.t === x.s.t && s.label === x.s.label); if (!fresh) continue; try { if (fresh.t === 'quick') { if (await quickCreate(x.l, fresh)) n++; } else { await applySuggestion(x.l, fresh); n++; } } catch (e) { console.warn(e); } }
-    toast(`${n} lines done`); render({ keepScroll: true });
-  },
-  'bk-rerun': () => { const n = autoMatch(S.bank.acc); toast(n ? n + ' more lines matched' : 'No new clear matches'); render({ keepScroll: true }); },
-  'bk-pick': el => { const l = Store.data.bankLines.find(x => x.id === el.dataset.id); if (l) pickEntryForLine(l); },
-  'bk-ignore': el => { const l = Store.data.bankLines.find(x => x.id === el.dataset.id); if (!l) return; l.status = 'ignored'; l.entryId = null; api.log('update', 'bankLines', l.id, `Bank line ${fmtDate(l.date)} ${money(lineAmt(l))} ignored`); Store.persist(); render({ keepScroll: true }); },
-  'bk-unignore': el => { const l = Store.data.bankLines.find(x => x.id === el.dataset.id); if (!l) return; l.status = 'open'; Store.persist(); render({ keepScroll: true }); },
-  'bk-unmatch': el => { const l = Store.data.bankLines.find(x => x.id === el.dataset.id); if (!l) return; l.status = 'open'; l.entryId = null; l.how = null; api.log('update', 'bankLines', l.id, `Bank line ${fmtDate(l.date)} ${money(lineAmt(l))} unmatched`); Store.persist(); toast('Unmatched. The entry stays in the books.'); render({ keepScroll: true }); },
-  'bk-del-import': async el => { const imp = Store.data.bankImports.find(i => i.id === el.dataset.id); if (!imp) return; if (!await confirmBox({ title: 'Remove this import?', body: `The ${imp.count} statement lines are removed. Entries you added from them stay in the books.`, ok: 'Remove', danger: true })) return; imp.deleted = true; Store.data.bankLines.forEach(l => { if (l.importId === imp.id) l.deleted = true; }); api.log('delete', 'bankImports', imp.id, 'Removed statement ' + imp.fileName); Store.persist(); render(); },
-  'bk-del-rule': el => { Store.data.settings.bankRules.splice(+el.dataset.i, 1); Store.persist(); render({ keepScroll: true }); },
-});
-document.addEventListener('change', ev => { if (ev.target.id === 'bkFile' && ev.target.files[0]) { const f = ev.target.files[0]; ev.target.value = ''; importStatement(f, S.bank.acc); } });
-/** Shown in the entry drawer. */
-function bankLineFor(entryId) { return Store.data.bankLines.find(l => !l.deleted && l.entryId === entryId && l.status !== 'ignored'); }
-/* ============================ COMPLIANCE CALENDAR ============================ */
-/* Statutory dates for a proprietorship with monthly GST returns, payroll TDS and vendor TDS.
-   Amounts come from the books; "paid" comes from statutory entries (taxPeriod); "filed" is a tick kept in Store.data.compliance[key].
-   BACKEND: GET /api/compliance?fy= returns the same list; POST /api/compliance/:key {done, at, ref}. */
-IC.cal = '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>';
-S.comp = { view: 'list', range: 'open' };
-const COMP_TYPES = {
-  tds: ['TDS deposit', 'pay', 'Challan ITNS 281'], gstr1: ['GSTR-1', 'file', 'Outward supplies'], gstr3b: ['GSTR-3B + GST payment', 'both', 'Summary return and tax'],
-  pt: ['Professional tax', 'pay', 'Maharashtra PT (employer)'], adv: ['Advance tax', 'pay', 'Income tax instalment'], tdsret24: ['TDS return 24Q', 'file', 'Salaries'], tdsret26: ['TDS return 26Q', 'file', 'Vendors & professionals'],
-  f16a: ['Form 16A to vendors', 'file', 'TDS certificates'], gstr9: ['GSTR-9 annual return', 'file', 'GST annual'], audit: ['Tax audit report', 'file', 'Form 3CD, if audit applies'], itr: ['Income tax return', 'file', 'Proprietor, audit case'],
-};
-const lastDay = ym => ymDate(ym, 31);
-const monthsLate = (from, to) => { if (to <= from) return 0; const a = +from.slice(0, 4) * 12 + +from.slice(5, 7), b = +to.slice(0, 4) * 12 + +to.slice(5, 7); return b - a + 1; };
-function compMark(key) { return (Store.data.compliance || {})[key] || null; }
-function statEntries(cat) { return Calc.live().filter(e => e.categoryId === cat); }
-function tdsDeducted(months, salaryOnly) {
-  if (typeof tdsMonth === 'function') return r2(sum(months.flatMap(m => tdsMonth(m).rows).filter(r => salaryOnly == null || (r.sec === '192') === salaryOnly), r => r.tds));
-  const set = new Set(months), sal = new Set(['cat_sal', 'cat_ceo', 'cat_bonus']);
-  return r2(sum(Calc.live().filter(e => e.type === 'outflow' && set.has(ymOf(e.date)) && e.categoryId !== 'cat_tdsdep' && +e.tdsAmount > 0 && (salaryOnly == null || sal.has(e.categoryId) === salaryOnly)), e => e.tdsAmount));
-}
-function gstNet(ym) { if (typeof gstMonth === 'function') return gstMonth(ym).cash.total; const es = Calc.live().filter(e => ymOf(e.date) === ym); return r2(sum(es.filter(e => e.type === 'inflow'), e => e.gstAmount) - sum(es.filter(e => e.type === 'outflow' && e.itc), e => e.gstAmount)); }
-/** All obligations whose period falls between two months, with status and money. */
-function complianceItems({ fromYm, toYm } = {}) {
-  const cs = featureSettings().compliance, on = cs.items || {};
-  const open = Store.data.settings.openingDate || '2025-04-01';
-  fromYm = fromYm || ymOf(open); toYm = toYm || addMonths(ymOf(TODAY), 3);
-  const out = [], add = o => { if (o.due) out.push(o); };
-  const tdsPaid = {}; statEntries('cat_tdsdep').forEach(e => { const p = taxPeriodOf(e); (tdsPaid[p] = tdsPaid[p] || []).push(e); });
-  const gstPaid = {}; statEntries('cat_gstpay').forEach(e => { const p = taxPeriodOf(e); (gstPaid[p] = gstPaid[p] || []).push(e); });
-  const ptPaid = {}; statEntries('cat_ptax').forEach(e => { const p = e.taxPeriod || ymOf(e.date); (ptPaid[p] = ptPaid[p] || []).push(e); });
-  const lastPT = lastEntry(e => e.categoryId === 'cat_ptax');
-  const ptRec = api.list('recurring').find(r => r.categoryId === 'cat_ptax' && r.active);
-  for (let ym = fromYm; ym <= toYm; ym = addMonths(ym, 1)) {
-    const nx = addMonths(ym, 1), ended = lastDay(ym) < TODAY;
-    if (on.tds !== false) { const amt = ended || ym === ymOf(TODAY) ? tdsDeducted([ym]) : null; const paid = tdsPaid[ym] || [];
-      add({ key: 'tds:' + ym, type: 'tds', period: ym, label: 'TDS deposit · ' + monthLabel(ym, true), due: ym.slice(5) === '03' ? nx + '-30' : ymDate(nx, 7), amount: amt, paid: sum(paid, e => e.amount), entries: paid, taxSub: 'tds' }); }
-    if (on.gstr1 !== false && cs.gstFreq === 'monthly') add({ key: 'gstr1:' + ym, type: 'gstr1', period: ym, label: 'GSTR-1 · ' + monthLabel(ym, true), due: ymDate(nx, 11), amount: null });
-    if (on.gstr3b !== false && cs.gstFreq === 'monthly') { const net = ended ? gstNet(ym) : null; const paid = gstPaid[ym] || [];
-      add({ key: 'gstr3b:' + ym, type: 'gstr3b', period: ym, label: 'GSTR-3B · ' + monthLabel(ym, true), due: ymDate(nx, 20), amount: net == null ? null : Math.max(0, net), credit: net == null ? 0 : typeof gstMonth === 'function' ? totH(gstMonth(ym).carryOut) : net < 0 ? -net : 0, paid: sum(paid, e => e.amount), entries: paid, taxSub: 'gst', file: true }); }
-    if (on.pt !== false && cs.ptMonthly) { const paid = ptPaid[ym] || [];
-      add({ key: 'pt:' + ym, type: 'pt', period: ym, label: 'Professional tax · ' + monthLabel(ym, true), due: lastDay(ym), amount: ptRec ? ptRec.taxable : lastPT ? lastPT.amount : null, paid: sum(paid, e => e.amount), entries: paid, taxSub: 'pt' }); }
-  }
-  // quarterly & annual items by FY
-  const fy0 = fyOf(fromYm + '-01'), fy1 = fyOf(toYm + '-01');
-  for (let fy = fy0; fy <= fy1; fy++) {
-    for (let q = 0; q < 4; q++) {
-      const ms = quarterMonths(fy, q); if (ms[2] < fromYm || ms[0] > toYm) continue;
-      const due = q === 3 ? (fy + 1) + '-05-31' : q === 2 ? (fy + 1) + '-01-31' : fy + (q === 0 ? '-07-31' : '-10-31');
-      const qLabel = `${FY_Q(q)} ${fyLabel(fy).replace('FY ', '')}`;
-      const sal = tdsDeducted(ms, true), ven = tdsDeducted(ms, false);
-      if (on.tdsret !== false) {
-        if (sal > 0 || ms[2] >= ymOf(TODAY)) add({ key: 'tdsret24Q:' + fy + 'Q' + (q + 1), type: 'tdsret24', period: ms[2], label: 'TDS return 24Q · ' + qLabel, due, amount: null, tdsBase: sal, file: true });
-        if (ven > 0 || ms[2] >= ymOf(TODAY)) add({ key: 'tdsret26Q:' + fy + 'Q' + (q + 1), type: 'tdsret26', period: ms[2], label: 'TDS return 26Q · ' + qLabel, due, amount: null, tdsBase: ven, file: true });
-      }
-      if (on.f16a !== false && (ven > 0 || ms[2] >= ymOf(TODAY))) add({ key: 'f16a:' + fy + 'Q' + (q + 1), type: 'f16a', period: ms[2], label: 'Form 16A to vendors · ' + qLabel, due: addDays(due, 15), amount: null, tdsBase: ven, file: true });
-    }
-    if (on.adv !== false) {
-      const est = +((cs.advTaxByFy || {})[fy] ?? (fy === fyOf(TODAY) ? cs.advTaxEstimate : 0)) || 0; const paidAll = statEntries('cat_advtax').filter(e => fyOf(e.date) === fy);
-      if (!est && fy < fyOf(TODAY)) continue;
-      [['06-15', 15], ['09-15', 45], ['12-15', 75], ['03-15', 100]].forEach(([md, cum], i) => {
-        const due = (i === 3 ? fy + 1 : fy) + '-' + md; if (ymOf(due) < fromYm || ymOf(due) > toYm) return;
-        const paidBy = sum(paidAll.filter(e => e.date <= addDays(due, 3)), e => e.amount), need = est ? r2(est * cum / 100) : null;
-        const inst = paidAll.filter(e => e.date <= addDays(due, 3) && e.date > (i ? (i === 3 ? fy + 1 : fy) + '-' + ['06-15', '09-15', '12-15'][i - 1] : fy + '-04-01'));
-        add({ key: 'adv:' + fy + ':' + (i + 1), type: 'adv', period: ymOf(due), label: `Advance tax · instalment ${i + 1} (${cum}%) · ${fyLabel(fy)}`, due, amount: need == null ? null : Math.max(0, r2(need - (paidBy - sum(inst, e => e.amount)))), cum: need, paid: sum(inst, e => e.amount), paidToDate: paidBy, entries: inst, taxSub: 'adv', noEstimate: !est });
-      });
-    }
-    if (on.pt !== false && !cs.ptMonthly) { const due = (fy + 1) + '-03-31'; if (ymOf(due) >= fromYm && ymOf(due) <= toYm) { const paid = statEntries('cat_ptax').filter(e => fyOf(e.date) === fy); const per = ptRec ? ptRec.taxable : lastPT ? lastPT.amount : null;
-      add({ key: 'pt:' + fy, type: 'pt', period: ymOf(due), label: 'Professional tax · ' + fyLabel(fy), due, amount: per == null ? null : per * 12, paid: sum(paid, e => e.amount), entries: paid, taxSub: 'pt' }); } }
-    if (on.gstr9 !== false && cs.gstFreq) { const due = (fy + 1) + '-12-31'; if (ymOf(due) >= fromYm && ymOf(due) <= toYm) add({ key: 'gstr9:' + fy, type: 'gstr9', period: ymOf(due), label: 'GSTR-9 · ' + fyLabel(fy), due, amount: null, file: true }); }
-    if (on.itr !== false) {
-      [['audit', (fy + 1) + '-09-30', 'Tax audit report · '], ['itr', (fy + 1) + '-10-31', 'Income tax return · ']].forEach(([t, due, l]) => { if (ymOf(due) >= fromYm && ymOf(due) <= toYm) add({ key: t + ':' + fy, type: t, period: ymOf(due), label: l + fyLabel(fy), due, amount: null, file: true }); });
-    }
-  }
-  out.forEach(o => {
-    const mk = compMark(o.key); o.mark = mk;
-    const payKind = ['tds', 'gstr3b', 'pt', 'adv'].includes(o.type);
-    o.balance = payKind && o.amount != null ? Math.max(0, r2(o.amount - (o.paid || 0))) : null;
-    const paidOk = !payKind || (o.amount != null && o.balance < 1) || (o.type === 'adv' && o.noEstimate && o.paid > 0);
-    const filedOk = !(o.file || COMP_TYPES[o.type][1] === 'file') || !!(mk && mk.done);
-    o.needsFile = (o.file || COMP_TYPES[o.type][1] === 'file');
-    o.done = (paidOk && filedOk) || !!(mk && mk.done && !payKind) || (payKind && o.amount === 0 && filedOk);
-    const days = diffDays(o.due, TODAY);
-    o.days = days;
-    o.status = o.done ? 'done' : days < 0 ? 'overdue' : days <= 10 ? 'soon' : 'upcoming';
-    o.penalty = o.status === 'overdue' ? penaltyFor(o) : null;
-  });
-  return out.sort((a, b) => a.due.localeCompare(b.due) || a.label.localeCompare(b.label));
-}
-/** Rough cost of being late if settled today, with the rule used. */
-function penaltyFor(o) {
-  const late = -o.days;
-  if (o.type === 'tds' && o.balance > 0) { const m = monthsLate(o.period + '-01', TODAY); return { amt: Math.round(o.balance * 0.015 * m), rule: `1.5% a month × ${m} months on ${money(o.balance)} (s.201(1A))` }; }
-  if (o.type === 'gstr3b') { const intr = o.balance > 0 ? Math.round(o.balance * 0.18 * late / 365) : 0; const fee = (o.mark && o.mark.done) ? 0 : Math.min(late * (o.amount ? 50 : 20), o.amount ? 10000 : 500); return { amt: intr + fee, rule: `${intr ? `18% a year interest ${money(intr)} + ` : ''}late fee ₹${o.amount ? 50 : 20}/day${fee ? ' = ' + money(fee) : ''}` }; }
-  if (o.type === 'gstr1') { const fee = Math.min(late * 50, 10000); return { amt: fee, rule: `Late fee ₹50/day (max ₹10,000)` }; }
-  if (o.type === 'tdsret24' || o.type === 'tdsret26') { const fee = Math.min(late * 200, o.tdsBase || 0); return { amt: fee, rule: `₹200/day, capped at the TDS of ${money(o.tdsBase || 0)} (s.234E)` }; }
-  if (o.type === 'f16a') { const fee = Math.min(late * 100, o.tdsBase || 0); return { amt: fee, rule: '₹100/day per certificate, capped at the TDS (s.272A(2)(g))' }; }
-  if (o.type === 'adv' && o.balance > 0) { return { amt: Math.round(o.balance * 0.01 * 3), rule: '1% a month for 3 months on the shortfall (s.234C)' }; }
-  if (o.type === 'pt' && o.balance > 0) { const m = monthsLate(o.due, TODAY); return { amt: Math.round(o.balance * 0.0125 * m), rule: '1.25% a month on the unpaid tax' }; }
-  if (o.type === 'gstr9') return { amt: Math.min(late * 200, 0.005 * 3e7), rule: '₹200/day, max 0.5% of turnover' };
-  if (o.type === 'itr') return { amt: 5000, rule: 'Late fee ₹5,000 (s.234F) + 1%/month interest on unpaid tax' };
-  if (o.type === 'audit') return { amt: null, rule: 'Penalty up to ₹1.5 lakh (s.271B)' };
-  return null;
-}
-const COMP_STATUS = { done: ['Done', 'inflow'], overdue: ['Overdue', 'overdue'], soon: ['Due soon', 'gold'], upcoming: ['Upcoming', ''] };
-function compRow(o, can) {
-  const st = COMP_STATUS[o.status], payKind = o.balance != null || ['tds', 'gstr3b', 'pt', 'adv'].includes(o.type);
-  const money1 = o.amount == null ? (o.type === 'adv' && o.noEstimate ? '<span class="muted">Set estimate in Settings</span>' : o.needsFile && !payKind ? '<span class="muted">Filing</span>' : '<span class="faint">After month end</span>') : o.amount === 0 ? `<span class="muted">${o.type === 'gstr3b' && o.credit ? 'Nil · ' + money(o.credit) + ' credit c/f' : 'Nothing to pay'}</span>` : `<b class="num">${money(o.amount)}</b>`;
-  const paidTxt = payKind && o.paid ? `<div class="cell-sub">Paid ${money(o.paid)}${o.entries && o.entries.length ? ' · ' + o.entries.map(e => fmtDate(e.date)).join(', ') : ''}${o.balance > 0 ? ` · <span class="out">${money(o.balance)} left</span>` : ''}</div>` : '';
-  const filed = o.needsFile ? (o.mark && o.mark.done ? `<div class="cell-sub in">Filed ${fmtDate((o.mark.at || '').slice(0, 10))}${o.mark.ref ? ' · ' + esc(o.mark.ref) : ''}</div>` : o.status !== 'upcoming' || o.days < 30 ? '<div class="cell-sub">Not filed yet</div>' : '') : '';
-  const acts = !can ? '' : [
-    payKind && o.balance > 0 && o.type !== 'gstr1' ? `<button class="btn btn-sm ${o.status === 'overdue' || o.status === 'soon' ? 'btn-gold' : ''}" data-act="cp-pay" data-key="${o.key}">Record payment</button>` : '',
-    o.needsFile && !(o.mark && o.mark.done) ? `<button class="btn btn-sm" data-act="cp-file" data-key="${o.key}">Mark filed</button>` : '',
-    o.mark && o.mark.done ? `<button class="btn btn-sm btn-ghost" data-act="cp-unfile" data-key="${o.key}">Undo</button>` : '',
-  ].join('');
-  return `<div class="cp-row ${o.status}"><div class="cp-date"><b>${fmtDate(o.due).slice(0, 6)}</b><span>${o.status === 'done' ? '' : o.days < 0 ? -o.days + 'd late' : o.days === 0 ? 'today' : 'in ' + o.days + 'd'}</span></div>
-    <div class="cp-main"><div class="t">${esc(o.label)} <span class="chip ${st[1]}">${st[0]}</span></div><div class="s">${esc(COMP_TYPES[o.type][2])}</div>${paidTxt}${filed}${o.penalty && o.penalty.amt != null ? `<div class="cp-pen">${icon('alert').replace('<svg', '<svg style="width:13px;height:13px"')} If settled today: about <b>${money(o.penalty.amt)}</b> · ${esc(o.penalty.rule)}</div>` : o.penalty ? `<div class="cp-pen">${esc(o.penalty.rule)}</div>` : ''}</div>
-    <div class="cp-amt">${money1}</div><div class="cp-acts">${acts}</div></div>`;
-}
-PAGES.compliance = {
-  title: 'Compliance calendar',
-  render() {
-    const can = api.can('compliance.mark') || api.can('entry.create');
-    const [fyF] = fyRange(S.fy);
-    const items = complianceItems({ fromYm: ymOf(Store.data.settings.openingDate || fyF), toYm: addMonths(ymOf(TODAY), 4) });
-    const over = items.filter(o => o.status === 'overdue'), soon = items.filter(o => !o.done && o.days >= 0 && o.days <= 30);
-    const doneFY = items.filter(o => o.done && fyOf(o.due) === fyOf(TODAY));
-    const toPay = sum(soon, o => o.balance || 0) + sum(over, o => o.balance || 0);
-    const kpis = `<div class="grid g-kpi cp-kpis">
-      <div class="card kpi ${over.length ? 'warn' : ''}"><div class="k-l">Overdue</div><div class="k-v ${over.length ? 'out' : 'in'}">${over.length}</div><div class="k-s">${over.length ? 'About ' + money(sum(over, o => (o.penalty && o.penalty.amt) || 0)) + ' in fees & interest if settled today' : 'Nothing late'}</div></div>
-      <div class="card kpi"><div class="k-l">Due in 30 days</div><div class="k-v">${soon.length}</div><div class="k-s">${money(toPay)} to pay incl. overdue</div></div>
-      <div class="card kpi"><div class="k-l">Next deadline</div><div class="k-v" style="font-size:18px">${soon[0] ? fmtDate(soon[0].due) : '—'}</div><div class="k-s">${soon[0] ? esc(soon[0].label) : ''}</div></div>
-      <div class="card kpi"><div class="k-l">Done · ${esc(fyLabel(fyOf(TODAY)))}</div><div class="k-v in">${doneFY.length}</div><div class="k-s">paid or filed on record</div></div></div>`;
-    const V = S.comp.view;
-    const tabs = `<div class="row" style="gap:10px;flex-wrap:wrap"><div class="seg">${[['list', 'To do'], ['year', 'Year view'], ['done', 'Done']].map(([k, l]) => `<button class="${V === k ? 'on' : ''}" data-act="cp-view" data-v="${k}">${l}</button>`).join('')}</div><span class="spacer"></span><a class="btn btn-sm" href="#/settings" data-act="cp-settings">${icon('gear')} Compliance settings</a></div>`;
-    let body = '';
-    if (V === 'list') {
-      const list = items.filter(o => !o.done && o.days <= 60);
-      const groups = [['Overdue', list.filter(o => o.status === 'overdue')], ['Next 10 days', list.filter(o => o.status === 'soon')], ['Later', list.filter(o => o.status === 'upcoming')]].filter(g => g[1].length);
-      body = groups.map(([g, l]) => `<div class="card"><div class="card-h"><h3 class="grow">${g} <span class="tw-n">${l.length}</span></h3></div>${l.map(o => compRow(o, can)).join('')}</div>`).join('') || `<div class="card"><div class="empty"><b>All caught up</b>Nothing due in the next 60 days.</div></div>`;
-    } else if (V === 'done') {
-      const list = items.filter(o => o.done).reverse().slice(0, 80);
-      body = `<div class="card">${list.map(o => compRow(o, can)).join('') || '<div class="empty">Nothing recorded yet.</div>'}</div>`;
-    } else {
-      const fy = S.fy, months = fyMonths(fy);
-      const yi = complianceItems({ fromYm: months[0], toYm: addMonths(months[11], 2) }).filter(o => fyOf(o.period + '-01') === fy || (o.type === 'adv' && o.key.startsWith('adv:' + fy)));
-      const rowsT = [['tds', 'TDS deposit'], ['gstr1', 'GSTR-1'], ['gstr3b', 'GSTR-3B'], ['pt', 'Professional tax'], ['adv', 'Advance tax'], ['tdsret24', 'TDS return 24Q'], ['tdsret26', 'TDS return 26Q'], ['f16a', 'Form 16A']];
-      const cell = o => { if (!o) return '<td class="cp-cell"></td>'; const st = COMP_STATUS[o.status]; return `<td class="cp-cell"><span class="cp-dot ${o.status}" title="${esc(o.label)} · due ${fmtDate(o.due)} · ${st[0]}${o.amount ? ' · ' + money(o.amount) : ''}">${o.status === 'done' ? icon('check') : ''}</span>${o.amount ? `<div class="cp-mini num">${shortMoney(o.amount)}</div>` : ''}</td>`; };
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>${esc(fyLabel(fy))} at a glance</h3><div class="sub">By the month the obligation is for. Hover a dot for details.</div></div><div class="cp-legend">${Object.entries(COMP_STATUS).map(([k, [l]]) => `<span><i class="cp-dot ${k}"></i>${l}</span>`).join('')}</div></div>
-        <div class="tbl-wrap"><table class="tbl cp-year"><thead><tr><th></th>${months.map(m => `<th class="num">${monthLabel(m)}</th>`).join('')}</tr></thead><tbody>
-        ${rowsT.map(([t, l]) => `<tr><td class="cell-main">${l}</td>${months.map(m => cell(yi.find(o => o.type === t && o.period === m))).join('')}</tr>`).join('')}</tbody></table></div></div>`;
-    }
-    return `<div class="stack">${kpis}${tabs}${body}<div class="muted" style="font-size:12px">Amounts come from your entries: TDS deducted on payments, GST collected less input credit, PT from the recurring template. Penalties are estimates from the statutory rates; check exact amounts on the portal. Dates follow monthly GST filing; change it in Settings.</div></div>`;
-  },
-};
-const shortMoney = n => n >= 1e7 ? (n / 1e7).toFixed(1) + 'Cr' : n >= 1e5 ? (n / 1e5).toFixed(1) + 'L' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : Math.round(n);
-function compByKey(key) { const [, p] = key.split(':'); const ym = /^\d{4}-\d{2}$/.test(p) ? p : null; return complianceItems(ym ? { fromYm: ym, toYm: ym } : {}).find(o => o.key === key); }
-function markFiled(key) {
-  const o = compByKey(key); if (!o) return;
-  const ov = openModal(`<div class="modal-h"><h2>Mark as filed</h2></div><div class="modal-b"><div style="font-weight:600;margin-bottom:12px">${esc(o.label)}</div><div class="fgrid c2">
-    <div class="field"><label>Filed on</label><input class="input" type="date" id="cpDate" value="${TODAY}"></div><div class="field"><label>ARN / acknowledgement no.</label><input class="input" id="cpRef" placeholder="Optional"></div></div></div>
-    <div class="modal-f"><button class="btn" data-x="no">Cancel</button><button class="btn btn-gold" data-x="yes">Mark filed</button></div>`, 'sm');
-  ov.addEventListener('click', ev => {
-    const b = ev.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'no') return ov.remove();
-    const d = $('#cpDate', ov).value || TODAY;
-    featureSettings(); Store.data.compliance[key] = { done: true, at: d + 'T12:00:00.000Z', by: api.me().id, ref: $('#cpRef', ov).value.trim() };
-    api.log('update', 'compliance', key, `${o.label} marked filed on ${fmtDate(d)}`); Store.persist(); ov.remove(); toast('Marked filed'); render({ keepScroll: true });
-  });
-}
-Object.assign(ACT, {
-  'cp-view': el => { S.comp.view = el.dataset.v; render({ keepScroll: true }); },
-  'cp-settings': () => { location.hash = '#/settings'; setTimeout(() => $('#compSettings')?.scrollIntoView({ block: 'start' }), 200); },
-  'cp-file': el => markFiled(el.dataset.key),
-  'cp-unfile': el => { const key = el.dataset.key; delete Store.data.compliance[key]; api.log('update', 'compliance', key, 'Filing tick removed for ' + key); Store.persist(); render({ keepScroll: true }); },
-  'cp-pay': el => {
-    const o = compByKey(el.dataset.key); if (!o) return;
-    const note = `Paying <b>${esc(o.label)}</b> · due ${fmtDate(o.due)}${o.balance ? ' · ' + money(o.balance) + ' outstanding' : ''}`;
-    openEntryForm({ kind: 'tax', note, preset: { type: 'outflow', taxSub: o.taxSub, taxPeriod: o.type === 'adv' ? null : o.period, amountOverride: o.balance || null } });
-  },
-});
-/** Small dashboard card. */
-function complianceCard() {
-  const items = complianceItems({ fromYm: addMonths(ymOf(TODAY), -14), toYm: addMonths(ymOf(TODAY), 2) }).filter(o => !o.done && o.days <= 21);
-  const over = items.filter(o => o.status === 'overdue');
-  return `<div class="card"><div class="card-h"><div class="grow"><h3>Compliance</h3><div class="sub">${over.length ? `<span class="out">${over.length} overdue</span> · ` : ''}next 3 weeks</div></div><a class="btn btn-sm" href="#/compliance">Calendar</a></div>
-    ${items.slice(0, 6).map(o => `<div class="list-row"><div class="cp-date sm ${o.status}"><b>${fmtDate(o.due).slice(0, 6)}</b></div><div class="grow"><div class="t">${esc(o.label)}</div><div class="s">${o.days < 0 ? `<span class="out">${-o.days} days late</span>` : o.days === 0 ? 'Due today' : 'In ' + o.days + ' days'}${o.penalty && o.penalty.amt ? ' · ~' + money(o.penalty.amt) + ' if paid today' : ''}</div></div><div class="num">${o.balance ? money(o.balance) : o.needsFile ? '<span class="muted" style="font-size:12px">File</span>' : ''}</div></div>`).join('') || '<div class="empty"><b>Nothing due</b>No statutory deadlines in the next 3 weeks.</div>'}</div>`;
-}
-function complianceSettingsCard() {
-  const cs = featureSettings().compliance, owner = api.can('settings.edit'), dis = owner ? '' : 'disabled';
-  const items = [['tds', 'TDS deposit (7th)'], ['gstr1', 'GSTR-1 (11th)'], ['gstr3b', 'GSTR-3B (20th)'], ['pt', 'Professional tax'], ['adv', 'Advance tax'], ['tdsret', 'TDS returns 24Q / 26Q'], ['f16a', 'Form 16A to vendors'], ['gstr9', 'GSTR-9 annual'], ['itr', 'Tax audit & ITR']];
-  return `<div class="card" id="compSettings"><div class="card-h"><div class="grow"><h3>Compliance calendar</h3><div class="sub">Which deadlines to track and how</div></div></div><div class="card-b"><form id="cpForm" class="fgrid">
-    <div class="field"><label>GST returns</label><select class="select" name="gstFreq" ${dis}>${opts([['monthly', 'Monthly (GSTR-1 11th, GSTR-3B 20th)']], cs.gstFreq)}</select><div class="hint">Quarterly (QRMP) can be added if you switch</div></div>
-    <div class="field"><label>Professional tax</label><select class="select" name="ptMonthly" ${dis}>${opts([['1', 'Monthly, by month end'], ['0', 'Annual, by 31 March']], cs.ptMonthly ? '1' : '0')}</select><div class="hint">Monthly if yearly PT is ₹50,000 or more</div></div>
-    <div class="field"><label>Estimated income tax for ${esc(fyLabel(fyOf(TODAY)))} (₹)</label><input class="input" name="advTaxEstimate" type="number" step="1000" min="0" value="${cs.advTaxEstimate || ''}" ${dis}><div class="hint">Advance-tax instalments are 15 / 45 / 75 / 100% of this</div></div>
-    <div class="field span3"><label>Track</label><div class="row" style="gap:6px 16px;flex-wrap:wrap">${items.map(([k, l]) => `<label class="check"><input type="checkbox" name="it_${k}" ${cs.items[k] !== false ? 'checked' : ''} ${dis}> ${l}</label>`).join('')}</div></div>
-    </form>${owner ? '<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn btn-navy" data-act="cp-save-settings">Save</button></div>' : ''}</div></div>`;
-}
-ACT['cp-save-settings'] = () => {
-  const f = $('#cpForm'), cs = featureSettings().compliance;
-  const items = {}; ['tds', 'gstr1', 'gstr3b', 'pt', 'adv', 'tdsret', 'f16a', 'gstr9', 'itr'].forEach(k => items[k] = f['it_' + k].checked);
-  Object.assign(cs, { gstFreq: f.gstFreq.value, ptMonthly: f.ptMonthly.value === '1', advTaxEstimate: +f.advTaxEstimate.value || 0, items }); cs.advTaxByFy = Object.assign({}, cs.advTaxByFy, { [fyOf(TODAY)]: +f.advTaxEstimate.value || 0 });
-  api.log('update', 'settings', 'compliance', 'Compliance settings updated'); Store.persist(); toast('Compliance settings saved'); render({ keepScroll: true });
-};
-/* ============================ COLLECTIONS: automatic PI reminders, statements of account ============================ */
-/* Reminder schedule (settings.reminders): offsets in days from the PI due date, e.g. -3, 0, 7, 15, then every `repeatDays`
-   until paid or `maxReminders` is reached. Each run queues at most one reminder per PI (the latest stage reached) and never
-   two within 3 days. Sent reminders are kept on the PI: pi.reminders = [{stage, offset, at, emailId}].
-   BACKEND: run runReminders() hourly from a server cron (Asia/Kolkata) so reminders go out with no browser open. */
-IC.bell = '<path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/>';
-function reminderPlan(pi) {
-  const R = featureSettings().reminders, offs = [...new Set((R.offsets || []).map(Number))].sort((a, b) => a - b);
-  const plan = offs.map(o => ({ offset: o, date: addDays(pi.dueDate, o) }));
-  let last = offs.length ? offs[offs.length - 1] : 0;
-  while (R.repeatDays > 0 && plan.length < (R.maxReminders || 8)) { last += +R.repeatDays; plan.push({ offset: last, date: addDays(pi.dueDate, last) }); }
-  return plan.slice(0, R.maxReminders || 8).map((p, i) => ({ ...p, stage: i }));
-}
-function remindersPaused(pi) { const R = featureSettings().reminders; return !!pi.remindersOff || (R.pausedClients || []).includes(pi.clientId); }
-/** What would happen for this PI right now: {plan, sent, next, dueNow, reason} */
-function reminderState(pi) {
-  const st = Sales.piState(pi), plan = reminderPlan(pi), sent = pi.reminders || [];
-  const out = { plan, sent, st };
-  if (pi.status === 'cancelled' || st.outstanding <= 0) return { ...out, reason: 'paid' };
-  if (remindersPaused(pi)) return { ...out, reason: 'paused' };
-  const reached = plan.filter(p => p.date <= TODAY && p.date >= pi.date);
-  const sentStages = new Set(sent.map(s => s.stage));
-  const latest = reached[reached.length - 1];
-  out.next = plan.find(p => p.date > TODAY && !sentStages.has(p.stage));
-  if (!latest || sentStages.has(latest.stage) || sent.some(s => s.stage > latest.stage)) return out;
-  const lastSent = sent[sent.length - 1];
-  if (lastSent && diffDays(TODAY, lastSent.at.slice(0, 10)) < 3) return out;
-  out.dueNow = latest; return out;
-}
-function reminderVars(pi, offset) {
-  const st = Sales.piState(pi), v = piEmailVars(pi), days = diffDays(TODAY, pi.dueDate), udyam = Store.data.settings.udyamNo;
-  return { ...v, pi_balance: money(st.outstanding), days_overdue: Math.max(0, days),
-    status_line: days < 0 ? `is due on ${fmtDate(pi.dueDate)}` : days === 0 ? 'is due today' : `is now ${days} days past its due date of ${fmtDate(pi.dueDate)}`,
-    subject_prefix: days < 0 ? 'Reminder' : days === 0 ? 'Due today' : `Overdue ${days} days`,
-    msme_line: udyam ? `As a registered micro/small enterprise (${udyam}), payments to us are due within 45 days under the MSMED Act, 2006.\n\n` : '' };
-}
-async function sendReminder(pi, stage, { manual = false } = {}) {
-  const c = api.get('parties', pi.clientId), R = featureSettings().reminders;
-  const r = emailRoute(c, 'pi_reminder'); if (!r.to.length) throw new Error('No email saved for ' + (c ? c.name : 'this client'));
-  const days = diffDays(TODAY, pi.dueDate);
-  const mgmt = days >= (R.escalateAfter || 15) ? partyContacts(c).filter(x => x.email && (x.tags || []).includes('management')).map(x => x.email) : [];
-  const t = emailSettings().templates.pi_reminder || DEFAULT_EMAIL_TEMPLATES.pi_reminder, vars = reminderVars(pi, stage ? stage.offset : days);
-  const m = await api.queueEmail({ kind: 'pi_reminder', entity: 'pis', entityId: pi.id, partyId: pi.clientId, to: r.to, cc: [...new Set([...r.cc, ...mgmt, ...(emailSettings().cc || [])])].filter(x => !r.to.includes(x)), subject: fillTemplate(t.subject, vars), body: fillTemplate(t.body, vars), attachments: pi.attachments || [] });
-  pi.reminders = [...(pi.reminders || []), { stage: stage ? stage.stage : -1, offset: stage ? stage.offset : days, at: nowISO(), emailId: m.id, manual }];
-  api.log('update', 'pis', pi.id, `Reminder ${manual ? 'sent' : 'queued automatically'} for PI ${pi.piNo} → ${r.to.join(', ')}`);
-  Store.persist(); return m;
-}
-let lastReminderRun = null;
-async function runReminders() {
-  const R = featureSettings().reminders; if (!R.enabled || !api.can('email.queue')) return 0;
-  let n = 0;
-  for (const pi of api.list('pis')) {
-    const rs = reminderState(pi); if (!rs.dueNow) continue;
-    try { await sendReminder(pi, rs.dueNow); n++; pi.reminderIssue = ''; }
-    catch (err) { if (pi.reminderIssue !== err.message) { pi.reminderIssue = err.message; Store.persist(); } }
-  }
-  lastReminderRun = { at: nowISO(), n };
-  if (n) toast(`${n} payment reminder${n > 1 ? 's' : ''} queued to clients`);
-  return n;
-}
-AUTOMATIONS.push(runReminders);
-function reminderSectionHTML(pi) {
-  const rs = reminderState(pi), can = api.can('pi.edit');
-  const c = api.get('parties', pi.clientId);
-  const sent = (pi.reminders || []).slice().reverse();
-  const head = rs.reason === 'paid' ? 'No reminders — PI is settled' : rs.reason === 'paused' ? (pi.remindersOff ? 'Paused for this PI' : 'Paused for ' + (c ? c.name : 'this client')) : rs.next ? `Next: ${fmtDate(rs.next.date)} (${rs.next.offset < 0 ? -rs.next.offset + ' days before due' : rs.next.offset === 0 ? 'on the due date' : rs.next.offset + ' days after due'})` : 'Reminder schedule finished';
-  return `<div class="fsec-h" style="margin-top:22px">Payment reminders</div>
-    <div class="rm-box"><div class="row" style="gap:8px;flex-wrap:wrap"><span class="chip ${rs.reason === 'paused' ? 'gold' : rs.reason === 'paid' ? 'inflow' : ''}">${icon('bell').replace('<svg', '<svg style="width:12px;height:12px"')} ${esc(head)}</span>${pi.reminderIssue ? `<span class="chip overdue">${esc(pi.reminderIssue)}</span>` : ''}</div>
-    <div class="rm-plan">${rs.plan.map(p => { const s = (pi.reminders || []).find(x => x.stage === p.stage); return `<span class="rm-step ${s ? 'sent' : p.date <= TODAY ? 'missed' : ''}" title="${fmtDate(p.date)}">${p.offset < 0 ? p.offset : p.offset === 0 ? 'Due' : '+' + p.offset}</span>`; }).join('')}</div>
-    ${sent.length ? sent.map(s => `<div class="list-row" style="padding:6px 0;cursor:pointer" data-act="view-email" data-id="${s.emailId}"><span class="faint" style="font-size:12px;width:120px">${fmtDateTime(s.at)}</span><span class="grow" style="font-size:13px">${s.manual ? 'Sent manually' : 'Automatic'} · ${s.offset < 0 ? -s.offset + ' days before due' : s.offset === 0 ? 'due date' : s.offset + ' days overdue'}</span></div>`).join('') : '<div class="muted" style="font-size:12.5px;margin-top:6px">None sent yet.</div>'}
-    ${can && rs.reason !== 'paid' ? `<div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">${rs.reason !== 'paused' ? `<button class="btn btn-sm" data-act="rm-now" data-id="${pi.id}">${icon('send')} Send reminder now</button>` : ''}<button class="btn btn-sm btn-ghost" data-act="rm-pause" data-id="${pi.id}">${pi.remindersOff ? 'Resume for this PI' : 'Pause for this PI'}</button><button class="btn btn-sm btn-ghost" data-act="rm-pause-client" data-id="${pi.clientId}" data-pi="${pi.id}">${(featureSettings().reminders.pausedClients || []).includes(pi.clientId) ? 'Resume for client' : 'Pause for client'}</button></div>` : ''}</div>`;
-}
-
-/* ---------- statement of account ---------- */
-function openPIsFor(clientId) {
-  return api.list('pis').filter(p => p.clientId === clientId && p.status !== 'cancelled').map(p => ({ p, st: Sales.piState(p) })).filter(x => x.st.outstanding > 0).sort((a, b) => a.p.dueDate.localeCompare(b.p.dueDate));
-}
-function statementVars(clientId) {
-  const rows = openPIsFor(clientId), c = api.get('parties', clientId);
-  const pad = (s, n, r) => { s = String(s); return r ? s.padStart(n) : s.padEnd(n); };
-  const table = [`${pad('PI no.', 22)}${pad('PI date', 13)}${pad('Due', 13)}${pad('Balance', 14, 1)}  Status`, '-'.repeat(76),
-    ...rows.map(({ p, st }) => `${pad(p.piNo.split('/').slice(-2).join('/'), 22)}${pad(fmtDate(p.date), 13)}${pad(fmtDate(p.dueDate), 13)}${pad(money(st.outstanding), 14, 1)}  ${st.overdueDays ? st.overdueDays + ' days overdue' : 'Not yet due'}`)].join('\n');
-  const total = sum(rows, x => x.st.outstanding), udyam = Store.data.settings.udyamNo;
-  return { party: c ? c.name : '', date: fmtDate(TODAY), statement_table: table, total_due: money(total), company: Store.data.settings.company, msme_line: udyam ? `As a registered micro/small enterprise (${udyam}), payments to us are due within 45 days under the MSMED Act, 2006.\n\n` : '' };
-}
-function openStatement(clientId) {
-  const c = api.get('parties', clientId); if (!c) return;
-  const rows = openPIsFor(clientId), total = sum(rows, x => x.st.outstanding), over = sum(rows.filter(x => x.st.overdueDays), x => x.st.outstanding);
-  const recent = Calc.live().filter(e => e.partyId === clientId && e.type === 'inflow').sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
-  closeDrawer();
-  const ov = openModal(`<div class="modal-h"><h2>Statement of account</h2><span class="muted" style="font-size:12.5px">${esc(c.name)} · as of ${fmtDate(TODAY)}</span><span class="spacer"></span><button class="icon-btn" data-s="close">${icon('x')}</button></div><div class="modal-b">
-    <div class="mini-kpis"><div><span>Outstanding</span><b>${money(total)}</b></div><div><span>Overdue</span><b class="${over ? 'out' : ''}">${money(over)}</b></div><div><span>Open PIs</span><b>${rows.length}</b></div><div><span>Credit terms</span><b>${c.creditDays != null && c.creditDays !== '' ? c.creditDays + ' days' : '—'}</b></div></div>
-    <div class="tbl-wrap" style="margin-top:14px"><table class="tbl"><thead><tr><th>PI</th><th>Milestone</th><th>Date</th><th>Due</th><th class="num">PI total</th><th class="num">Received</th><th class="num">Balance</th></tr></thead><tbody>
-    ${rows.map(({ p, st }) => `<tr><td class="mono" style="font-size:12px">${esc(p.piNo)}</td><td>${esc(p.milestone || '')}<div class="cell-sub">${esc(nameOf('projects', p.projectId))}</div></td><td>${fmtDate(p.date)}</td><td>${fmtDate(p.dueDate)}${st.overdueDays ? `<div class="cell-sub out">${st.overdueDays} days overdue</div>` : ''}</td><td class="num">${money(p.total)}</td><td class="num in">${st.gross ? money(st.gross) : '–'}</td><td class="num" style="font-weight:600">${money(st.outstanding)}</td></tr>`).join('') || '<tr><td colspan="7"><div class="empty">Nothing outstanding.</div></td></tr>'}
-    </tbody>${rows.length ? `<tfoot><tr><td colspan="6">Total outstanding</td><td class="num">${money(total)}</td></tr></tfoot>` : ''}</table></div>
-    ${recent.length ? `<div class="fsec-h" style="margin-top:18px">Recent payments received</div>${recent.map(e => `<div class="list-row" style="padding:6px 0"><span class="grow" style="font-size:13px">${fmtDate(e.date)} · ${esc(e.refNo || e.description || '')}</span><span class="num in">${money(e.amount)}</span></div>`).join('')}` : ''}
-    </div><div class="modal-f"><button class="btn" data-s="print">${icon('file')} Print / PDF</button>${rows.length && api.can('email.queue') ? `<button class="btn btn-gold" data-s="email">${icon('mail')} Email to client</button>` : ''}</div>`, 'xl');
-  ov.addEventListener('click', ev => {
-    const b = ev.target.closest('[data-s]'); if (!b) return;
-    if (b.dataset.s === 'close') return ov.remove();
-    if (b.dataset.s === 'email') { ov.remove(); return composeCustom({ kind: 'statement', partyId: clientId, vars: () => statementVars(clientId), context: `Statement for ${c.name} · ${money(total)} outstanding`, entity: 'parties', entityId: clientId }); }
-    if (b.dataset.s === 'print') {
-      let root = $('#printRoot'); if (!root) { root = document.createElement('div'); root.id = 'printRoot'; document.body.appendChild(root); }
-      root.innerHTML = `<div class="print-page soa"><h1 style="font:600 22px var(--f-head)">${esc(Store.data.settings.company)}</h1><div class="muted">Statement of account · ${fmtDate(TODAY)}</div><h2 style="margin-top:18px">${esc(c.name)}</h2><div class="muted">${esc([c.address, c.pincode].filter(Boolean).join(' – '))}${c.gstin ? ' · GSTIN ' + esc(c.gstin) : ''}</div>${$('.modal-b .tbl-wrap', ov).innerHTML}${Store.data.settings.udyamNo ? `<p style="margin-top:16px;font-size:12px">Registered MSME ${esc(Store.data.settings.udyamNo)} — payments due within 45 days under the MSMED Act, 2006.</p>` : ''}</div>`;
-      document.body.classList.add('print-mode');
-      const done = () => { document.body.classList.remove('print-mode'); root.innerHTML = ''; window.removeEventListener('afterprint', done); };
-      window.addEventListener('afterprint', done); setTimeout(() => { window.print(); setTimeout(() => { if (document.body.classList.contains('print-mode') && !window.matchMedia('print').matches) done(); }, 1500); }, 60);
-    }
-  });
-}
-/** Generic review-and-queue composer for emails that aren't tied to an entry or PI form. */
-function composeCustom({ kind, partyId, vars, context, entity, entityId, docs = [], onQueued }) {
-  if (!api.can('email.queue')) return toast('Not allowed for your role', 'error');
-  const E = initEmail(kind, partyId, true); E.on = true;
-  const ov = openModal(`<div class="modal-h"><h2>${esc(EMAIL_KINDS[kind])}</h2><button class="icon-btn" data-c="close">${icon('x')}</button></div><div class="modal-b" id="emBody"></div>
-    <div class="modal-f"><button class="btn" data-c="close">Cancel</button><button class="btn" data-c="mailapp">Open in mail app</button><button class="btn btn-gold" data-c="queue">${icon('send')} Queue email</button></div>`);
-  const body = $('#emBody', ov); const draw = () => { refreshEmail(E, vars()); body.innerHTML = `<div class="muted" style="font-size:13px;margin-bottom:12px">${esc(context || '')}</div>` + emailBoxHTML(E, { docs: docs.length, standalone: true }); };
-  draw(); bindEmailEvents(body, () => E, draw);
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-c]'); if (!b) return;
-    if (b.dataset.c === 'close') return ov.remove();
-    try {
-      checkEmail(E);
-      const m = await finalizeEmail(E, { entity, entityId, docs });
-      if (b.dataset.c === 'mailapp') { window.location.href = mailtoHref(m); await api.setEmailStatus(m.id, 'mailapp', 'Opened in mail app by ' + api.me().name); }
-      ov.remove(); toast(b.dataset.c === 'mailapp' ? 'Opened in your mail app · logged in the outbox' : 'Email queued to ' + m.to.join(', '));
-      if (onQueued) await onQueued(m); afterWrite();
-    } catch (err) { toast(err.message, 'error'); }
-  });
-}
-Object.assign(ACT, {
-  'rm-now': async el => { const pi = api.get('pis', el.dataset.id); try { const m = await sendReminder(pi, null, { manual: true }); toast('Reminder queued to ' + m.to.join(', ')); openPI(pi.id); } catch (err) { toast(err.message, 'error'); } },
-  'rm-pause': async el => { const pi = api.get('pis', el.dataset.id); pi.remindersOff = !pi.remindersOff; api.log('update', 'pis', pi.id, `Reminders ${pi.remindersOff ? 'paused' : 'resumed'} for PI ${pi.piNo}`); Store.persist(); openPI(pi.id); },
-  'rm-pause-client': el => { const R = featureSettings().reminders, id = el.dataset.id; R.pausedClients = (R.pausedClients || []).includes(id) ? R.pausedClients.filter(x => x !== id) : [...(R.pausedClients || []), id]; api.log('update', 'settings', 'reminders', `Reminders ${R.pausedClients.includes(id) ? 'paused' : 'resumed'} for ${nameOf('parties', id)}`); Store.persist(); toast(R.pausedClients.includes(id) ? 'Reminders paused for ' + nameOf('parties', id) : 'Reminders resumed'); if (el.dataset.pi) openPI(el.dataset.pi); else render({ keepScroll: true }); },
-  'soa': el => openStatement(el.dataset.id),
-});
-
-/* ============================ WEEKLY DIGEST ============================ */
-/* Queued every week on settings.digest.weekday at settings.digest.hour (default Monday 09:00) to settings.digest.to.
-   BACKEND: same schedule from cron; the HTML preview below mirrors the plain-text email. */
-const weekKey = d => { const x = new Date(d + 'T00:00:00'); const day = (x.getDay() + 6) % 7; x.setDate(x.getDate() - day); return isoDate(x); };
-function digestData() {
-  const from7 = addDays(TODAY, -7), to7 = addDays(TODAY, 7);
-  const last = Calc.inRange(from7, addDays(TODAY, -1)).filter(e => e.type !== 'transfer');
-  const pis = api.list('pis').filter(p => p.status !== 'cancelled').map(p => ({ p, st: Sales.piState(p) })).filter(x => x.st.outstanding > 0);
-  const overdue = pis.filter(x => x.st.overdueDays > 0).sort((a, b) => b.st.outstanding - a.st.outstanding);
-  const dueSoon = pis.filter(x => !x.st.overdueDays && x.p.dueDate <= to7);
-  const recur = Calc.pendingRecurring(to7).filter(p => p.rec.type === 'outflow');
-  const comp = complianceItems({ fromYm: addMonths(ymOf(TODAY), -14), toYm: addMonths(ymOf(TODAY), 1) }).filter(o => !o.done && o.days <= 14);
-  const remSent = api.list('emails').filter(m => m.kind === 'pi_reminder' && m.createdAt >= from7);
-  const bankOpen = Store.data.bankLines.filter(l => !l.deleted && lineStatus(l) === 'open');
-  const lastImport = {}; Store.data.bankImports.filter(i => !i.deleted).forEach(i => { if (!lastImport[i.accountId] || i.to > lastImport[i.accountId]) lastImport[i.accountId] = i.to; });
-  const ym = ymOf(TODAY), billed = sum(api.list('pis').filter(p => p.status !== 'cancelled' && ymOf(p.date) === ym), p => p.taxable), target = sum(api.list('departments'), d => Sales.targetForMonth(ym, d.id));
-  const tds = typeof tdsSummary === 'function' ? tdsSummary(fyOf(TODAY)) : null;
-  return { cash: Calc.cash(TODAY), cashPrev: Calc.cash(from7), inflow: sum(last.filter(e => e.type === 'inflow'), e => e.amount), outflow: sum(last.filter(e => e.type === 'outflow'), e => e.amount),
-    topIn: last.filter(e => e.type === 'inflow').sort((a, b) => b.amount - a.amount).slice(0, 3), overdue, dueSoon, recur, comp, remSent, bankOpen, lastImport, billed, target, tds };
-}
-function digestText(D) {
-  const L = [], h = s => { L.push(''); L.push(s.toUpperCase()); };
-  L.push(`Weekly summary · ${Store.data.settings.company} · ${fmtDate(TODAY)}`);
-  h('Cash'); L.push(`Bank, FD and cash today: ${money(D.cash)} (${money(D.cash - D.cashPrev, { sign: true })} in 7 days)`); L.push(`Last 7 days: received ${money(D.inflow)}, paid ${money(D.outflow)}`);
-  D.topIn.forEach(e => L.push(`  + ${money(e.amount)} · ${entryParty(e) || entryTitle(e)} · ${fmtDate(e.date)}`));
-  h('Money to collect'); L.push(`Overdue PIs: ${D.overdue.length} · ${money(sum(D.overdue, x => x.st.outstanding))}`);
-  D.overdue.slice(0, 5).forEach(x => L.push(`  ${nameOf('parties', x.p.clientId)} · ${x.p.piNo} · ${money(x.st.outstanding)} · ${x.st.overdueDays} days`));
-  if (D.dueSoon.length) L.push(`Due this week: ${D.dueSoon.length} PIs · ${money(sum(D.dueSoon, x => x.st.outstanding))}`);
-  L.push(`Reminders sent automatically in the last 7 days: ${D.remSent.length}`);
-  h('Money going out this week'); L.push(`Recurring items due: ${D.recur.length} · ${money(sum(D.recur, p => p.net))}`); D.recur.slice(0, 6).forEach(p => L.push(`  ${fmtDate(p.dueDate)} · ${p.rec.name} · ${money(p.net)}${p.overdue ? ' (overdue)' : ''}`));
-  h('Compliance (next 14 days)'); if (!D.comp.length) L.push('Nothing due.'); D.comp.forEach(o => L.push(`  ${fmtDate(o.due)} · ${o.label}${o.balance ? ' · ' + money(o.balance) : ''}${o.days < 0 ? ` · ${-o.days} DAYS LATE` : ''}`));
-  h('Bank'); L.push(D.bankOpen.length ? `${D.bankOpen.length} statement lines waiting for review` : 'All imported statement lines are matched');
-  bankAccounts().forEach(a => L.push(`  ${a.name}: ${D.lastImport[a.id] ? 'statement imported up to ' + fmtDate(D.lastImport[a.id]) : 'no statement imported yet'}`));
-  if (D.tds) { h('TDS deducted by clients'); L.push(`${fyLabel(fyOf(TODAY))}: ${money(D.tds.books)} deducted · ${money(D.tds.gap)} not yet in 26AS · ${D.tds.pending16A} Form 16A pending`); }
-  h('Sales this month'); L.push(`PIs issued: ${money(D.billed)}${D.target ? ` of ${money(D.target)} target (${Math.round(100 * D.billed / D.target)}%)` : ''}`);
-  L.push(''); L.push('Open the app for details.');
-  return L.join('\n');
-}
-function digestHTML(D) {
-  const li = (a, b, cls = '') => `<div class="dg-li"><span>${a}</span><b class="num ${cls}">${b}</b></div>`;
-  return `<div class="dg">
-    <div class="dg-sec"><h4>Cash</h4>${li('Bank, FD and cash today', money(D.cash))}${li('Change in 7 days', money(D.cash - D.cashPrev, { sign: true }), D.cash >= D.cashPrev ? 'in' : 'out')}${li('Received last 7 days', money(D.inflow), 'in')}${li('Paid last 7 days', money(D.outflow), 'out')}</div>
-    <div class="dg-sec"><h4>To collect</h4>${li('Overdue PIs · ' + D.overdue.length, money(sum(D.overdue, x => x.st.outstanding)), D.overdue.length ? 'out' : '')}${D.overdue.slice(0, 4).map(x => li(`<span class="muted">${esc(nameOf('parties', x.p.clientId))} · ${x.st.overdueDays}d</span>`, money(x.st.outstanding))).join('')}${li('Due this week · ' + D.dueSoon.length, money(sum(D.dueSoon, x => x.st.outstanding)))}${li('Reminders sent (7 days)', D.remSent.length)}</div>
-    <div class="dg-sec"><h4>Going out this week</h4>${li('Recurring items · ' + D.recur.length, money(sum(D.recur, p => p.net)))}${D.comp.slice(0, 5).map(o => li(`${fmtDate(o.due).slice(0, 6)} · ${esc(o.label)}${o.days < 0 ? ' <span class="out">late</span>' : ''}`, o.balance ? money(o.balance) : 'file')).join('')}</div>
-    <div class="dg-sec"><h4>Bank & tax</h4>${li('Statement lines to review', D.bankOpen.length, D.bankOpen.length ? 'out' : 'in')}${bankAccounts().map(a => li(esc(a.name) + ' imported to', D.lastImport[a.id] ? fmtDate(D.lastImport[a.id]) : 'never', !D.lastImport[a.id] || diffDays(TODAY, D.lastImport[a.id]) > 10 ? 'out' : '')).join('')}${D.tds ? li('TDS not yet in 26AS', money(D.tds.gap), D.tds.gap ? 'out' : '') + li('Form 16A pending', D.tds.pending16A) : ''}${li('PIs issued this month', money(D.billed) + (D.target ? ` · ${Math.round(100 * D.billed / D.target)}% of target` : ''))}</div></div>`;
-}
-async function queueDigest(manual) {
-  const G = featureSettings().digest; if (!G.to || !G.to.length) throw new Error('Add at least one recipient for the weekly digest in Settings');
-  const D = digestData();
-  const m = await api.queueEmail({ kind: 'digest', entity: 'digest', entityId: weekKey(TODAY), partyId: null, to: G.to, cc: [], subject: `Weekly summary · ${fmtDate(TODAY)} · cash ${money(D.cash)} · ${D.overdue.length} overdue PIs`, body: digestText(D), attachments: [] });
-  if (!manual) G.lastWeek = weekKey(TODAY); G.lastSentAt = nowISO(); Store.persist(); return m;
-}
-async function runDigest() {
-  const G = featureSettings().digest; if (!G.enabled || !G.to || !G.to.length || !api.can('email.queue')) return;
-  const wk = weekKey(TODAY); if (G.lastWeek === wk) return;
-  const now = new Date(), dow = (now.getDay() + 6) % 7 + 1; // Mon=1..Sun=7
-  if (dow < (G.weekday || 1) || (dow === (G.weekday || 1) && now.getHours() < (G.hour ?? 9))) return;
-  await queueDigest(false); toast('Weekly digest queued to ' + G.to.join(', '));
-}
-AUTOMATIONS.push(runDigest);
-function openDigestPreview() {
-  const D = digestData(), G = featureSettings().digest;
-  const ov = openModal(`<div class="modal-h"><h2>Weekly digest</h2><span class="muted" style="font-size:12.5px">as it would go out today</span><span class="spacer"></span><button class="icon-btn" data-d="close">${icon('x')}</button></div><div class="modal-b">${digestHTML(D)}
-    <details style="margin-top:14px"><summary class="muted" style="cursor:pointer;font-size:13px">Email text</summary><pre class="dg-pre">${esc(digestText(D))}</pre></details></div>
-    <div class="modal-f"><span class="muted" style="font-size:12px;margin-right:auto">${G.to.length ? 'To ' + esc(G.to.join(', ')) : 'No recipient set'}</span>${api.can('email.queue') && G.to.length ? `<button class="btn btn-gold" data-d="send">${icon('send')} Send now</button>` : ''}</div>`, 'xl');
-  ov.addEventListener('click', async ev => { const b = ev.target.closest('[data-d]'); if (!b) return; if (b.dataset.d === 'close') return ov.remove(); try { const m = await queueDigest(true); ov.remove(); toast('Digest queued to ' + m.to.join(', ')); render({ keepScroll: true }); } catch (err) { toast(err.message, 'error'); } });
-}
-function automationSettingsCard() {
-  const R = featureSettings().reminders, G = featureSettings().digest, owner = api.can('settings.edit'), dis = owner ? '' : 'disabled';
-  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-  return `<div class="card" id="autoSettings"><div class="card-h"><div class="grow"><h3>Reminders & weekly digest</h3><div class="sub">Automatic emails. They are queued in the outbox; the backend sends them.</div></div><button class="btn btn-sm" data-act="dg-preview">Preview digest</button></div><div class="card-b"><form id="auForm">
-    <div class="fsec-h">PI payment reminders</div><div class="fgrid">
-      <div class="field" style="justify-content:flex-end"><label class="check" style="height:38px"><input type="checkbox" name="rEnabled" ${R.enabled ? 'checked' : ''} ${dis}> Send reminders automatically</label></div>
-      <div class="field"><label>Days from due date</label><input class="input mono" name="rOffsets" value="${esc((R.offsets || []).join(', '))}" ${dis}><div class="hint">Negative = before due. Default −3, 0, 7, 15</div></div>
-      <div class="field"><label>Then repeat every (days)</label><input class="input" type="number" min="0" name="rRepeat" value="${R.repeatDays}" ${dis}><div class="hint">0 = stop after the list · max ${R.maxReminders} reminders per PI</div></div>
-      <div class="field"><label>Copy Management contacts after (days overdue)</label><input class="input" type="number" min="0" name="rEsc" value="${R.escalateAfter}" ${dis}></div>
-      <div class="field"><label>Your Udyam registration no.</label><input class="input mono" name="udyam" value="${esc(Store.data.settings.udyamNo || '')}" placeholder="UDYAM-MH-00-0000000" ${dis}><div class="hint">Adds the MSMED Act 45-day line to reminders and statements</div></div>
-      <div class="field"><label>Paused clients</label><div style="font-size:13px;padding-top:8px">${(R.pausedClients || []).map(id => esc(nameOf('parties', id))).join(', ') || '<span class="muted">None</span>'}</div></div>
-    </div>
-    <div class="fsec-h" style="margin-top:18px">Weekly digest to the owner</div><div class="fgrid">
-      <div class="field" style="justify-content:flex-end"><label class="check" style="height:38px"><input type="checkbox" name="gEnabled" ${G.enabled ? 'checked' : ''} ${dis}> Send every week</label></div>
-      <div class="field"><label>Day & time</label><div class="row" style="flex-wrap:nowrap;gap:6px"><select class="select" name="gDay" ${dis}>${opts(days.map((d, i) => [i + 1, d]), G.weekday)}</select><select class="select" name="gHour" style="max-width:100px" ${dis}>${opts(Array.from({ length: 24 }, (_, h) => [h, pad2(h) + ':00']), G.hour)}</select></div></div>
-      <div class="field"><label>Send to</label><input class="input" name="gTo" value="${esc((G.to || []).join(', '))}" placeholder="you@iuova.in" ${dis}><div class="hint">${G.lastSentAt ? 'Last queued ' + fmtDateTime(G.lastSentAt) : 'Not sent yet'}</div></div>
-    </div></form>${owner ? '<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn btn-navy" data-act="au-save">Save</button></div>' : ''}</div></div>`;
-}
-Object.assign(ACT, {
-  'dg-preview': () => openDigestPreview(),
-  'au-save': () => {
-    const f = $('#auForm'), R = featureSettings().reminders, G = featureSettings().digest;
-    const offs = String(f.rOffsets.value).split(/[,\s]+/).filter(Boolean).map(Number);
-    if (!offs.length || offs.some(x => isNaN(x) || Math.abs(x) > 365)) return toast('Days from due date should be numbers like -3, 0, 7, 15', 'error');
-    const to = splitEmails(f.gTo.value), bad = to.filter(x => !validEmail(x)); if (bad.length) return toast('Not a valid email: ' + bad.join(', '), 'error');
-    Object.assign(R, { enabled: f.rEnabled.checked, offsets: offs, repeatDays: Math.max(0, +f.rRepeat.value || 0), escalateAfter: Math.max(0, +f.rEsc.value || 0) });
-    Object.assign(G, { enabled: f.gEnabled.checked, weekday: +f.gDay.value, hour: +f.gHour.value, to });
-    Store.data.settings.udyamNo = f.udyam.value.trim();
-    api.log('update', 'settings', 'automation', 'Reminder and digest settings updated'); Store.persist(); toast('Saved'); render({ keepScroll: true });
-  },
-});
-/** Dashboard row: compliance + collections at a glance. */
-function dashActionCards() {
-  const pis = api.list('pis').filter(p => p.status !== 'cancelled').map(p => ({ p, st: Sales.piState(p), rs: reminderState(p) })).filter(x => x.st.outstanding > 0);
-  const over = pis.filter(x => x.st.overdueDays > 0).sort((a, b) => b.st.overdueDays - a.st.overdueDays);
-  const today = api.list('emails').filter(m => m.kind === 'pi_reminder' && (m.createdAt || '').slice(0, 10) === TODAY).length;
-  const nextR = pis.map(x => x.rs.next).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date))[0];
-  const coll = `<div class="card"><div class="card-h"><div class="grow"><h3>Collections</h3><div class="sub">${today ? `${today} reminder${today > 1 ? 's' : ''} queued today` : 'Reminders run automatically'}${nextR ? ' · next ' + fmtDate(nextR.date) : ''}</div></div><a class="btn btn-sm" href="#/pis">PIs</a></div>
-    ${over.slice(0, 5).map(x => `<div class="list-row" style="cursor:pointer" data-act="open-pi" data-id="${x.p.id}"><div class="grow"><div class="t">${esc(nameOf('parties', x.p.clientId))}</div><div class="s">${esc(x.p.piNo.split('/').slice(-2).join('/'))} · <span class="out">${x.st.overdueDays} days overdue</span>${x.rs.reason === 'paused' ? ' · reminders paused' : (x.p.reminders || []).length ? ' · ' + x.p.reminders.length + ' reminder' + (x.p.reminders.length > 1 ? 's' : '') + ' sent' : ''}</div></div><div class="num" style="font-weight:600">${money(x.st.outstanding)}</div><button class="btn btn-sm btn-ghost" data-act="soa" data-id="${x.p.clientId}" title="Statement of account">SOA</button></div>`).join('') || '<div class="empty"><b>Nothing overdue</b>All PIs are within their due dates.</div>'}</div>`;
-  return `<div class="grid g-2">${complianceCard()}${coll}</div>`;
-}
-/* ============================ TDS RECEIVABLE: deducted by clients vs Form 26AS / AIS, Form 16A tracking ============================ */
-/* Books: inflow entries with tdsAmount, grouped by payer and FY quarter (by receipt date).
-   26AS: Store.data.tds26 rows {fy, tan, name, date, section, amount, tds, status, importId, partyId} from a TRACES text file or AIS / 26AS Excel/CSV.
-   16A: Store.data.tdsCerts {clientId, fy, q, received, receivedAt, certNo, note}.
-   BACKEND: POST /api/tds26/import (file); GET /api/tds/summary?fy=. */
-S.tdsr = { open: null };
-const TAN_RX = /^[A-Z]{4}\d{5}[A-Z]$/;
-const tdsPayers = () => api.list('parties').filter(p => p.kind === 'client' || p.kind === 'other');
-/* ---------- parsing ---------- */
-function parse26ASText(text) {
-  const rows = [], lines = text.replace(/\r/g, '').split('\n'); let cur = null, inPart1 = false, sawPart = false;
-  for (const raw of lines) {
-    const f = raw.split('^').map(x => x.trim());
-    const joined = f.join(' ').toUpperCase();
-    if (/PART[\s\-]*I\b(?!I)/.test(joined) && !/PART[\s\-]*I[IV]/.test(joined)) { inPart1 = true; sawPart = true; continue; }
-    if (/PART[\s\-]*(II|III|IV|V|VI|VII|VIII|IX|X)\b/.test(joined) && sawPart) { inPart1 = false; cur = null; continue; }
-    if (sawPart && !inPart1) continue;
-    const ti = f.findIndex(x => TAN_RX.test(x));
-    if (ti > 0) { cur = { tan: f[ti], name: f[ti - 1] || f.slice(0, ti).filter(Boolean).pop() || '' }; continue; }
-    const si = f.findIndex(x => /^19\d[A-Z]{0,3}$/.test(x));
-    const di = f.findIndex(x => parseBankDate(x));
-    if (cur && si >= 0 && di >= 0) {
-      const nums = f.slice(di + 1).map(x => x.replace(/,/g, '')).filter(x => /^-?\d+(\.\d+)?$/.test(x)).map(Number);
-      if (nums.length >= 2) rows.push({ tan: cur.tan, name: cur.name, section: f[si], date: parseBankDate(f[di]), status: (f.find((x, i) => i > di && /^[FUPOZ]$/.test(x)) || ''), amount: nums[nums.length - 3] ?? nums[0], tds: nums.length >= 3 ? nums[nums.length - 1] : nums[nums.length - 1] });
-    }
-  }
-  return rows;
-}
-function parse26ASSheet(rows) {
-  for (let i = 0; i < Math.min(rows.length, 40); i++) {
-    const c = rows[i].map(x => String(x).toLowerCase().replace(/\s+/g, ' ').trim());
-    const ix = rx => c.findIndex(x => rx.test(x));
-    const m = { tan: ix(/tan/), name: ix(/name of (the )?deductor|deductor name|^name$|information source/), section: ix(/section/), date: ix(/transaction date|date of (payment|credit|booking)|^date/), amount: ix(/amount (paid|credited)|paid ?\/ ?credited|transaction amount|^amount/), tds: ix(/tds deposited|tax deposited|tax deducted|tds deducted|^tds/) };
-    if (m.tan >= 0 && m.date >= 0 && m.tds >= 0) {
-      const out = [];
-      for (let j = i + 1; j < rows.length; j++) {
-        const r = rows[j]; const tan = String(r[m.tan] || '').trim().toUpperCase(); const date = parseBankDate(r[m.date]);
-        if (!TAN_RX.test(tan) || !date) continue;
-        out.push({ tan, name: m.name >= 0 ? String(r[m.name] || '').trim() : tan, section: m.section >= 0 ? String(r[m.section] || '').trim() : '', date, status: '', amount: Math.abs(parseBankAmt(r[m.amount]) || 0), tds: Math.abs(parseBankAmt(r[m.tds]) || 0) });
-      }
-      return out;
-    }
-  }
-  return null;
-}
-const NAME_GENERIC = new Set(['pvt', 'ltd', 'limited', 'private', 'india', 'co', 'the', 'and', 'llp', 'inc', 'company']);
-const nameToks = s => normTxt(s).split(' ').filter(x => x.length >= 2 && !NAME_GENERIC.has(x));
-const nameSim = (a, b) => { const A = new Set(nameToks(a)), B = new Set(nameToks(b)); if (!A.size || !B.size) return 0; let n = 0; A.forEach(t => { if (B.has(t)) n++; }); return n / Math.min(A.size, B.size); };
-function payerForTan(tan, name) {
-  const byTan = tdsPayers().find(p => (p.tan || '').toUpperCase() === tan); if (byTan) return { p: byTan, how: 'tan' };
-  const cands = tdsPayers().filter(p => !p.tan).map(p => ({ p, s: nameSim(name, p.name) })).filter(x => x.s >= 0.6).sort((a, b) => b.s - a.s);
-  if (cands.length === 1 || (cands.length > 1 && cands[0].s - cands[1].s >= 0.3)) return { p: cands[0].p, how: 'name' };
-  return null;
-}
-async function import26AS(file) {
-  if (!api.can('tds.edit')) return toast('Not allowed for your role', 'error');
-  let rows = null;
-  try {
-    if (/\.(xlsx|xls)$/i.test(file.name)) rows = parse26ASSheet(await readSheetRows(file));
-    else { const text = await file.text(); rows = text.includes('^') ? parse26ASText(text) : parse26ASSheet(parseCSV(text)); }
-  } catch (err) { return toast(err.message, 'error'); }
-  if (!rows || !rows.length) return toast('No TDS entries found. Use the 26AS text file from TRACES, or the AIS / 26AS export as Excel or CSV.', 'error');
-  featureSettings();
-  const fys = [...new Set(rows.map(r => fyOf(r.date)))];
-  const tans = [...new Map(rows.map(r => [r.tan, r.name])).entries()];
-  const map = tans.map(([tan, name]) => ({ tan, name, m: payerForTan(tan, name), tds: sum(rows.filter(r => r.tan === tan), r => r.tds) }));
-  const ov = openModal(`<div class="modal-h"><h2>Import Form 26AS</h2><span class="muted" style="font-size:12.5px">${esc(file.name)}</span></div><div class="modal-b">
-    <div class="bk-prev"><div><span>Financial year</span><b>${fys.map(fyLabel).join(', ')}</b></div><div><span>TDS entries</span><b>${rows.length}</b></div><div><span>Deductors</span><b>${tans.length}</b></div><div><span>Total TDS credited</span><b>${money(sum(rows, r => r.tds))}</b></div></div>
-    <div class="fsec-h" style="margin-top:16px">Who deducted it</div>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Deductor in 26AS</th><th class="num">TDS</th><th>Payer in your books</th></tr></thead><tbody>
-    ${map.map((x, i) => `<tr><td><div class="cell-main">${esc(x.name)}</div><div class="cell-sub mono">${esc(x.tan)}</div></td><td class="num">${money(x.tds)}</td><td><select class="select sel-sm" data-tmap="${i}"><option value="">Not a client / skip</option>${tdsPayers().map(p => `<option value="${p.id}"${x.m && x.m.p.id === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select>${x.m ? `<div class="cell-sub">${x.m.how === 'tan' ? 'Matched by TAN' : 'Matched by name · TAN will be saved'}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>
-    <div class="hint" style="margin-top:8px">Re-importing replaces the earlier 26AS data for the same year.</div></div>
-    <div class="modal-f"><button class="btn" data-t="no">Cancel</button><button class="btn btn-gold" data-t="yes">Import</button></div>`, 'xl');
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-t]'); if (!b) return; if (b.dataset.t === 'no') return ov.remove();
-    const pick = {}; $$('[data-tmap]', ov).forEach(s => { const x = map[+s.dataset.tmap]; pick[x.tan] = s.value || null; });
-    const impId = uid('t26');
-    Store.data.tds26 = Store.data.tds26.filter(r => !fys.includes(r.fy));
-    rows.forEach(r => Store.data.tds26.push({ id: uid('t26'), importId: impId, fy: fyOf(r.date), ...r, partyId: pick[r.tan] || null }));
-    let saved = 0;
-    for (const [tan, pid] of Object.entries(pick)) { const p = api.get('parties', pid); if (p && (p.tan || '').toUpperCase() !== tan) { await api.update('parties', p.id, { tan }, { summary: `TAN ${tan} saved for ${p.name} from 26AS` }); saved++; } }
-    Store.data.settings.tds26Imports = [...(Store.data.settings.tds26Imports || []).filter(i => !fys.includes(i.fy)), ...fys.map(fy => ({ fy, at: nowISO(), file: file.name, by: api.me().id }))];
-    api.log('create', 'tds26', impId, `Imported 26AS · ${fys.map(fyLabel).join(', ')} · ${rows.length} TDS entries`);
-    Store.persist(); ov.remove(); if (fys.length) S.fy = fys.includes(S.fy) ? S.fy : fys[fys.length - 1];
-    location.hash = '#/tdsr'; render(); toast(`26AS imported · ${rows.length} entries${saved ? ` · TAN saved for ${saved} client${saved > 1 ? 's' : ''}` : ''}`);
-  });
-}
-/* ---------- reconciliation ---------- */
-function tds16ADue(fy, q) { return q === 3 ? (fy + 1) + '-06-15' : q === 2 ? (fy + 1) + '-02-15' : fy + (q === 0 ? '-08-15' : '-11-15'); }
-function tdsGrid(fy) {
-  const [f, t] = fyRange(fy);
-  const recs = Calc.inRange(f, t).filter(e => e.type === 'inflow' && +e.tdsAmount > 0 && e.partyId);
-  const as26 = (Store.data.tds26 || []).filter(r => r.fy === fy);
-  const imported = (Store.data.settings.tds26Imports || []).find(i => i.fy === fy);
-  const payers = [...new Set([...recs.map(e => e.partyId), ...as26.filter(r => r.partyId).map(r => r.partyId)])].map(id => api.get('parties', id)).filter(Boolean);
-  const rows = payers.map(p => {
-    const qs = [0, 1, 2, 3].map(q => {
-      const ms = new Set(quarterMonths(fy, q)), qEnd = ymDate(quarterMonths(fy, q)[2], 31);
-      const rr = recs.filter(e => e.partyId === p.id && ms.has(ymOf(e.date))), aa = as26.filter(r => r.partyId === p.id && ms.has(ymOf(r.date)));
-      const books = r2(sum(rr, e => e.tdsAmount)), in26 = r2(sum(aa, r => r.tds));
-      const cert = (Store.data.tdsCerts || []).find(c => !c.deleted && c.clientId === p.id && c.fy === fy && c.q === q);
-      const due16 = tds16ADue(fy, q), started = quarterMonths(fy, q)[0] <= ymOf(TODAY);
-      let st = 'none';
-      if (books || in26) {
-        if (qEnd >= TODAY) st = 'running'; else if (!imported) st = 'unchecked'; else if (imported.at.slice(0, 10) < addDays(qEnd, 31)) st = 'early';
-        else st = Math.abs(books - in26) <= 10 ? 'ok' : books > in26 ? 'short' : 'extra';
-      }
-      return { q, rr, aa, books, in26, cert, due16, st, started, gap: ['ok', 'short', 'extra'].includes(st) ? r2(books - in26) : null, certLate: books > 0 && !(cert && cert.received) && due16 < TODAY };
-    });
-    return { p, qs, books: sum(qs, x => x.books), in26: sum(qs, x => x.in26) };
-  }).filter(r => r.books || r.in26).sort((a, b) => b.books - a.books);
-  const unmapped = [...new Map(as26.filter(r => !r.partyId).map(r => [r.tan, { tan: r.tan, name: r.name, tds: 0 }])).values()].map(x => ({ ...x, tds: sum(as26.filter(r => r.tan === x.tan), r => r.tds) }));
-  return { rows, imported, unmapped, as26 };
-}
-function tdsSummary(fy) {
-  const G = tdsGrid(fy); const cells = G.rows.flatMap(r => r.qs);
-  return { books: sum(G.rows, r => r.books), in26: sum(G.rows, r => r.in26), gap: sum(cells.filter(c => c.st === 'short'), c => c.gap), pending16A: cells.filter(c => c.certLate).length, short: cells.filter(c => c.st === 'short').length, imported: G.imported };
-}
-const TDS_ST = { ok: ['Matched', 'inflow'], short: ['Short in 26AS', 'overdue'], extra: ['More in 26AS', 'gold'], unchecked: ['Not checked', ''], early: ['Return not due yet', ''], running: ['Quarter running', ''], none: ['', ''] };
-PAGES.tdsr = {
-  title: 'TDS receivable',
-  render() {
-    const fy = S.fy, G = tdsGrid(fy), can = api.can('tds.edit'), cells = G.rows.flatMap(r => r.qs.map(c => ({ ...c, p: r.p })));
-    const books = sum(G.rows, r => r.books), in26 = sum(G.rows, r => r.in26), short = cells.filter(c => c.st === 'short'), late16 = cells.filter(c => c.certLate);
-    const head = `<div class="bk-bar"><div><div style="font:600 15px var(--f-head)">${esc(fyLabel(fy))}</div><div class="muted" style="font-size:12.5px">${G.imported ? `26AS imported ${fmtDateTime(G.imported.at)} · ${esc(G.imported.file)}` : 'No 26AS imported for this year yet'}</div></div><span class="spacer"></span>
-      ${can ? `<button class="btn btn-sm" data-act="td-sample">${icon('bolt')} Try a sample 26AS</button><label class="btn btn-gold">${icon('upload')} Import 26AS / AIS<input type="file" id="tdFile" accept=".txt,.csv,.xls,.xlsx" style="display:none"></label>` : ''}</div>`;
-    const kpis = `<div class="grid g-kpi cp-kpis">
-      <div class="card kpi"><div class="k-l">Deducted by payers</div><div class="k-v">${money(books)}</div><div class="k-s">TDS on receipts in your books</div></div>
-      <div class="card kpi"><div class="k-l">Credited in 26AS</div><div class="k-v ${G.imported ? 'in' : ''}">${G.imported ? money(in26) : '—'}</div><div class="k-s">${G.imported ? 'Claimable against your tax' : 'Import 26AS to check'}</div></div>
-      <div class="card kpi ${short.length ? 'warn' : ''}"><div class="k-l">Missing from 26AS</div><div class="k-v ${short.length ? 'out' : ''}">${G.imported ? money(sum(short, c => c.gap)) : '—'}</div><div class="k-s">${short.length} client-quarter${short.length === 1 ? '' : 's'} to chase</div></div>
-      <div class="card kpi"><div class="k-l">Form 16A overdue</div><div class="k-v ${late16.length ? 'out' : ''}">${late16.length}</div><div class="k-s">certificates past the issue date</div></div></div>`;
-    const cell = (r, c) => {
-      if (!c.books && !c.in26) return `<td class="td-cell empty"><span class="faint">${c.started ? '—' : ''}</span></td>`;
-      const [l, cls] = TDS_ST[c.st];
-      return `<td class="td-cell" data-act="td-open" data-id="${r.p.id}" data-q="${c.q}"><div class="num" style="font-weight:600">${money(c.books)}</div>${G.imported && !['running'].includes(c.st) ? `<div class="cell-sub num">26AS ${money(c.in26)}</div>` : ''}<div class="td-tags">${l ? `<span class="chip ${cls}">${l}</span>` : ''}${c.books ? (c.cert && c.cert.received ? '<span class="chip inflow">16A ✓</span>' : c.certLate ? '<span class="chip overdue">16A due</span>' : '') : ''}</div></td>`;
-    };
-    const table = `<div class="card"><div class="card-h"><div class="grow"><h3>By payer and quarter</h3><div class="sub">Click a quarter for the receipts, 26AS lines and Form 16A. Quarters follow the receipt date; a deductor may report a payment in the next quarter.</div></div>${can && (short.length || late16.length) ? `<button class="btn btn-sm btn-navy" data-act="td-chase-all">${icon('mail')} Request from ${new Set([...short, ...late16].map(c => c.p.id)).size} payer${new Set([...short, ...late16].map(c => c.p.id)).size > 1 ? 's' : ''}</button>` : ''}</div>
-      <div class="tbl-wrap"><table class="tbl td-tbl"><thead><tr><th>Payer</th>${[0, 1, 2, 3].map(q => `<th class="num">${FY_Q(q)}<div class="cell-sub" style="text-transform:none;letter-spacing:0">16A by ${fmtDate(tds16ADue(fy, q)).slice(0, 6)}</div></th>`).join('')}<th class="num">Year</th></tr></thead><tbody>
-      ${G.rows.map(r => `<tr><td><a href="#" class="cell-main pd-link" data-act="open-party" data-id="${r.p.id}">${esc(r.p.name)}</a><div class="cell-sub mono">${esc(r.p.tan || 'TAN not saved')}</div></td>${r.qs.map(c => cell(r, c)).join('')}<td class="num"><b>${money(r.books)}</b>${G.imported ? `<div class="cell-sub">26AS ${money(r.in26)}</div>` : ''}</td></tr>`).join('') || `<tr><td colspan="6"><div class="empty">No TDS deducted on receipts in ${esc(fyLabel(fy))}.</div></td></tr>`}
-      </tbody></table></div></div>`;
-    const unm = G.unmapped.length ? `<div class="card"><div class="card-h"><div class="grow"><h3>In 26AS but not linked to a payer</h3><div class="sub">Link them so their TDS counts against the right client</div></div></div>${G.unmapped.map(u => `<div class="list-row"><div class="grow"><div class="t">${esc(u.name)}</div><div class="s mono">${esc(u.tan)}</div></div><span class="num">${money(u.tds)}</span>${can ? `<select class="select sel-sm" data-act-chg="td-link" data-tan="${u.tan}" style="max-width:220px"><option value="">Link to…</option>${tdsPayers().map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>` : ''}</div>`).join('')}</div>` : '';
-    return `<div class="stack">${head}${kpis}${table}${unm}<div class="muted" style="font-size:12px">Download Form 26AS from TRACES (View Tax Credit → export as Text) or the AIS / TIS from the income-tax portal as Excel/CSV. Matching is by the deductor's TAN; the first time, the app matches by name and saves the TAN on the client.</div></div>`;
-  },
-};
-function openTdsCell(pid, q) {
-  const fy = S.fy, G = tdsGrid(fy), r = G.rows.find(x => x.p.id === pid); if (!r) return; const c = r.qs[q], p = r.p, can = api.can('tds.edit');
-  const ov = openModal(`<div class="modal-h"><h2>${esc(p.name)}</h2><span class="muted" style="font-size:12.5px">${FY_Q(q)} · ${esc(fyLabel(fy))}</span><span class="spacer"></span><button class="icon-btn" data-z="close">${icon('x')}</button></div><div class="modal-b">
-    <div class="mini-kpis"><div><span>In books</span><b>${money(c.books)}</b></div><div><span>In 26AS</span><b>${G.imported ? money(c.in26) : '—'}</b></div><div><span>Difference</span><b class="${c.gap > 10 ? 'out' : ''}">${c.gap == null ? '—' : money(c.gap, { sign: true })}</b></div><div><span>Form 16A</span><b class="${c.cert && c.cert.received ? 'in' : c.certLate ? 'out' : ''}">${c.cert && c.cert.received ? 'Received' : c.certLate ? 'Overdue' : 'Due ' + fmtDate(c.due16)}</b></div></div>
-    <div class="fsec-h" style="margin-top:16px">Receipts with TDS (${c.rr.length})</div>${c.rr.map(e => `<div class="list-row" style="cursor:pointer" data-act="open-entry" data-id="${e.id}"><div class="grow"><div class="t" style="font-size:13px">${fmtDate(e.date)} · ${esc(e.refNo || e.description || '')}</div><div class="s">Taxable ${money(e.taxable)} · TDS ${e.tdsRate}%</div></div><span class="num">${money(e.tdsAmount)}</span></div>`).join('') || '<div class="muted" style="font-size:13px">None.</div>'}
-    <div class="fsec-h" style="margin-top:16px">Credits in 26AS (${c.aa.length})</div>${c.aa.map(a => `<div class="list-row" style="padding:6px 0"><div class="grow"><div class="t" style="font-size:13px">${fmtDate(a.date)} · ${esc(a.section)} ${a.status ? '· status ' + esc(a.status) : ''}</div><div class="s">Paid / credited ${money(a.amount)}</div></div><span class="num">${money(a.tds)}</span></div>`).join('') || `<div class="muted" style="font-size:13px">${G.imported ? 'Nothing reported by this deductor for the quarter.' : 'Import 26AS to compare.'}</div>`}
-    ${can ? `<div class="fsec-h" style="margin-top:16px">Form 16A</div><div class="fgrid c4"><div class="field" style="justify-content:flex-end"><label class="check" style="height:38px"><input type="checkbox" id="tdRec" ${c.cert && c.cert.received ? 'checked' : ''}> Received</label></div><div class="field"><label>Received on</label><input class="input" type="date" id="tdDate" value="${(c.cert && c.cert.receivedAt) || TODAY}"></div><div class="field span2"><label>Certificate no.</label><input class="input mono" id="tdNo" value="${esc((c.cert && c.cert.certNo) || '')}" placeholder="From the TRACES certificate"></div></div>` : ''}
-    </div><div class="modal-f">${can ? `<button class="btn" data-z="request">${icon('mail')} Request from ${esc(p.name.split(' ')[0])}</button><button class="btn btn-gold" data-z="save">Save</button>` : '<button class="btn" data-z="close">Close</button>'}</div>`);
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-z]'); if (!b) return;
-    if (b.dataset.z === 'close') return ov.remove();
-    if (b.dataset.z === 'request') { ov.remove(); return requestTds(p.id, fy, [q]); }
-    if (b.dataset.z === 'save') {
-      const rec = $('#tdRec', ov).checked, data = { clientId: p.id, fy, q, received: rec, receivedAt: rec ? $('#tdDate', ov).value : null, certNo: $('#tdNo', ov).value.trim(), note: '' };
-      if (c.cert) await api.update('tdsCerts', c.cert.id, data, { summary: `Form 16A ${rec ? 'received' : 'not received'} · ${p.name} · ${FY_Q(q)} ${fyLabel(fy)}` });
-      else await api.create('tdsCerts', data, { summary: `Form 16A ${rec ? 'received' : 'tracked'} · ${p.name} · ${FY_Q(q)} ${fyLabel(fy)}` });
-      ov.remove(); toast('Saved'); render({ keepScroll: true });
-    }
-  });
-}
-function tdsRequestVars(pid, fy, qs) {
-  const G = tdsGrid(fy), r = G.rows.find(x => x.p.id === pid), p = api.get('parties', pid);
-  const cells = r ? r.qs.filter(c => qs.includes(c.q)) : [];
-  const pad = (s, n, rt) => { s = String(s); return rt ? s.padStart(n) : s.padEnd(n); };
-  const lines = [`${pad('Date', 13)}${pad('Invoice / ref', 26)}${pad('Amount', 14, 1)}${pad('TDS', 12, 1)}`, '-'.repeat(65), ...cells.flatMap(c => c.rr).map(e => `${pad(fmtDate(e.date), 13)}${pad((e.refNo || e.description || '').slice(0, 24), 26)}${pad(money(e.taxable), 14, 1)}${pad(money(e.tdsAmount), 12, 1)}`), '-'.repeat(65), `${pad('Total TDS', 53)}${pad(money(sum(cells, c => c.books)), 12, 1)}`];
-  const gap = sum(cells.filter(c => c.gap > 10), c => c.gap);
-  return { party: p.name, quarter: cells.map(c => FY_Q(c.q)).join(', ') + ' ' + fyLabel(fy), tds_table: lines.join('\n'), tds_gap: gap > 0 ? `As per our Form 26AS, ${money(gap)} of this TDS is not yet reflected against our PAN${Store.data.settings.gstin ? '' : ''}. Kindly check your TDS return and file a correction if needed.\n\n` : '', company: Store.data.settings.company };
-}
-function requestTds(pid, fy, qs) { composeCustom({ kind: 'tds_request', partyId: pid, vars: () => tdsRequestVars(pid, fy, qs), context: `TDS certificate request · ${nameOf('parties', pid)} · ${qs.map(FY_Q).join(', ')} ${fyLabel(fy)}`, entity: 'parties', entityId: pid }); }
-/** A realistic TRACES 26AS text file built from the books, with one shortfall and one payer missing a TAN. */
-function sample26AS(fy) {
-  const [f, t] = fyRange(fy);
-  const recs = Calc.inRange(f, t).filter(e => e.type === 'inflow' && +e.tdsAmount > 0 && e.partyId).sort((a, b) => a.date.localeCompare(b.date));
-  const byP = {}; recs.forEach(e => (byP[e.partyId] = byP[e.partyId] || []).push(e));
-  const L = ['Form 26AS^^^^', 'Annual Tax Statement^^^', `Permanent Account Number (PAN)^ABCDE1234F^Current Status of PAN^Active^Financial Year^${fyLabel(fy).replace('FY ', '')}^Assessment Year^${fy + 1}-${String(fy + 2).slice(2)}`, `Name of Assessee^${Store.data.settings.company.toUpperCase()}`, '', 'PART-I - Details of Tax Deducted at Source^^', 'Sr. No.^Name of Deductor^TAN of Deductor^^^^^Total Amount Paid / Credited(Rs.)^Total Tax Deducted #(Rs.)^Total TDS Deposited(Rs.)'];
-  let sr = 0; const shortP = Object.keys(byP).find(id => id === 'cl_vl') || Object.keys(byP)[0];
-  for (const [pid, es] of Object.entries(byP)) {
-    const p = api.get('parties', pid); const tan = p.tan || (pid === 'ot_hdfc' ? 'MUMH03189E' : 'XXXX' + String(10000 + sr * 791).slice(-5) + 'X');
-    let list = es.map(e => ({ e, tds: e.tdsAmount }));
-    if (pid === shortP) { const last = list.filter(x => x.e.date <= addDays(TODAY, -45)).slice(-1)[0]; if (last) list = list.filter(x => x !== last); }
-    const tot = sum(list, x => x.e.taxable + x.e.gstAmount), tds = sum(list, x => x.tds);
-    sr++; L.push(`${sr}^${p.name.toUpperCase()}${pid === 'cl_zp' ? ' (INDIA)' : ''}^${pid === 'cl_zp' ? 'CHEZ06617B' : tan}^^^^^${tot.toFixed(2)}^${tds.toFixed(2)}^${tds.toFixed(2)}`);
-    L.push('^Sr. No.^Section 1^Transaction Date^Status of Booking*^Date of Booking^Remarks**^Amount Paid / Credited(Rs.)^Tax Deducted ##(Rs.)^TDS Deposited(Rs.)');
-    list.forEach((x, i) => { const d = x.e.date; L.push(`^${i + 1}^${pid === 'ot_hdfc' ? '194A' : '194J'}^${d.slice(8)}-${MON[+d.slice(5, 7) - 1]}-${d.slice(0, 4)}^F^${addDays(d, 40).slice(8)}-${MON[+addDays(d, 40).slice(5, 7) - 1]}-${addDays(d, 40).slice(0, 4)}^-^${(x.e.taxable + x.e.gstAmount).toFixed(2)}^${x.tds.toFixed(2)}^${x.tds.toFixed(2)}`); });
-  }
-  L.push('', 'PART-II - Details of Tax Deducted at Source for 15G / 15H^^', 'No Transactions Present', 'PART-III - Details of Transactions under Proviso to section 194B^^');
-  return L.join('\n');
-}
-Object.assign(ACT, {
-  'td-open': el => openTdsCell(el.dataset.id, +el.dataset.q),
-  'td-sample': () => { const fy = S.fy; const txt = sample26AS(fy); import26AS(new File([txt], `ABCDE1234F-${fy + 1}.txt`, { type: 'text/plain' })); },
-  'td-chase-all': async () => {
-    const fy = S.fy, G = tdsGrid(fy); const by = {};
-    G.rows.forEach(r => r.qs.forEach(c => { if (c.st === 'short' || c.certLate) (by[r.p.id] = by[r.p.id] || []).push(c.q); }));
-    const ids = Object.keys(by).filter(id => emailRoute(api.get('parties', id), 'tds_request').to.length);
-    const noMail = Object.keys(by).filter(id => !ids.includes(id));
-    if (!await confirmBox({ title: `Request TDS certificates from ${ids.length} payer${ids.length > 1 ? 's' : ''}?`, body: `${ids.map(id => `<div>${esc(nameOf('parties', id))} · ${by[id].map(FY_Q).join(', ')}</div>`).join('')}${noMail.length ? `<div class="out" style="margin-top:8px">No email saved for ${noMail.map(id => esc(nameOf('parties', id))).join(', ')}</div>` : ''}<div class="hint" style="margin-top:8px">One email each goes to their Accounts contacts, listing the receipts and any amount missing from 26AS.</div>`, ok: 'Queue emails' })) return;
-    const t = emailSettings().templates.tds_request || DEFAULT_EMAIL_TEMPLATES.tds_request; let n = 0;
-    for (const id of ids) { const v = tdsRequestVars(id, fy, by[id]); const r = emailRoute(api.get('parties', id), 'tds_request'); await api.queueEmail({ kind: 'tds_request', entity: 'parties', entityId: id, partyId: id, to: r.to, cc: emailSettings().cc || [], subject: fillTemplate(t.subject, v), body: fillTemplate(t.body, v), attachments: [] }); n++; }
-    toast(`${n} request${n > 1 ? 's' : ''} queued`); render({ keepScroll: true });
-  },
-});
-document.addEventListener('change', async ev => {
-  if (ev.target.id === 'tdFile' && ev.target.files[0]) { const f = ev.target.files[0]; ev.target.value = ''; import26AS(f); }
-  const s = ev.target.closest && ev.target.closest('[data-act-chg="td-link"]');
-  if (s && s.value) { const tan = s.dataset.tan, p = api.get('parties', s.value); (Store.data.tds26 || []).forEach(r => { if (r.tan === tan) r.partyId = p.id; }); if (!p.tan) await api.update('parties', p.id, { tan }, { summary: `TAN ${tan} saved for ${p.name}` }); Store.persist(); toast('Linked to ' + p.name); render({ keepScroll: true }); }
-});
-/* ============================ GST RETURNS: sales & purchase registers, GSTR-3B working, GSTR-2B match, CA pack ============================ */
-/* Sales (outward) month = tax invoice date on the PI. A receipt before the invoice is an advance (GST due in the receipt month)
-   and is adjusted in the invoice month. Credit notes reduce output tax in their own month. Exports (client state 99, no GST) are zero-rated under LUT.
-   Purchases (inward) month = bill date on the vendor payment (entry.billDate, else payment date) plus bills logged before payment (gstBills).
-   ITC set-off follows Rule 88A order; unused credit carries forward by head. Months go draft → sent → confirmed; a confirmed month rejects changes.
-   BACKEND: GET /api/gst/:ym returns gstMonth(ym); POST /api/gst/:ym/send, /confirm, /reopen; POST /api/gst2b/:ym (file). */
-IC.gst = '<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5M15 15l2 2 3-4"/>';
-S.gst = { ym: null, tab: 'summary' };
-const GST_STATUS = { draft: ['Draft', ''], sent: ['Sent to CA', 'gold'], confirmed: ['Confirmed', 'inflow'] };
-const headsOf = (gstType, amt) => gstType === 'inter' ? { igst: r2(amt), cgst: 0, sgst: 0 } : gstType === 'none' ? { igst: 0, cgst: 0, sgst: 0 } : { igst: 0, cgst: r2(amt / 2), sgst: r2(amt - r2(amt / 2)) };
-const ZERO = () => ({ taxable: 0, igst: 0, cgst: 0, sgst: 0 });
-const addH = (a, b, sign = 1) => { a.taxable = r2(a.taxable + sign * (b.taxable || 0)); a.igst = r2(a.igst + sign * b.igst); a.cgst = r2(a.cgst + sign * b.cgst); a.sgst = r2(a.sgst + sign * b.sgst); return a; };
-const totH = h => r2(h.igst + h.cgst + h.sgst);
-const normInv = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+/, '').replace(/([A-Z])0+(\d)/g, '$1$2');
-function gstState() { featureSettings(); return Store.data.settings.gst; }
-function piSac(pi) { const c = api.get('categories', catForPI(pi)); return (c && c.sac) || '998391'; }
-const isExportParty = p => p && (p.stateCode === '99' || (!p.gstin && p.gstType === 'none' && /usa|uae|uk|europe|inc\.?$|llc|gmbh/i.test(p.name + ' ' + (p.address || ''))));
-const posOf = p => p ? (p.stateCode === '99' ? 'Outside India (96)' : p.stateCode ? `${IN_STATES[p.stateCode] || ''} (${p.stateCode})` : (p.gstin ? `${IN_STATES[p.gstin.slice(0, 2)] || ''} (${p.gstin.slice(0, 2)})` : '—')) : '—';
-/** Outward rows for a month. */
-function salesRows(ym) {
-  const rows = [];
-  const pis = api.list('pis').filter(p => p.status !== 'cancelled');
-  for (const pi of pis) {
-    const c = api.get('parties', pi.clientId), exp = (+pi.gstRate === 0 && isExportParty(c));
-    if (pi.taxInvoiceDate && ymOf(pi.taxInvoiceDate) === ym) {
-      const h = { taxable: +pi.taxable, ...headsOf(pi.gstType, +pi.gstAmount) };
-      rows.push({ kind: exp ? 'export' : c && c.gstin ? 'b2b' : 'b2c', date: pi.taxInvoiceDate, no: pi.taxInvoiceNo || pi.piNo, piId: pi.id, party: c, sac: piSac(pi), rate: +pi.gstRate, ...h });
-    }
-    // receipts before the tax invoice month = advances; adjusted when the invoice is issued
-    const recs = Calc.live().filter(e => e.type === 'inflow' && e.piId === pi.id && +e.gstAmount > 0);
-    for (const e of recs) {
-      const invYm = pi.taxInvoiceDate ? ymOf(pi.taxInvoiceDate) : null;
-      if (!invYm || ymOf(e.date) < invYm) {
-        if (ymOf(e.date) === ym) rows.push({ kind: 'advance', date: e.date, no: 'Receipt ' + (e.txnRef || e.refNo || ''), piId: pi.id, entryId: e.id, party: c, sac: piSac(pi), rate: +e.gstRate, taxable: +e.taxable, ...headsOf(e.gstType, +e.gstAmount) });
-        if (invYm === ym) rows.push({ kind: 'adjust', date: pi.taxInvoiceDate, no: 'Advance adjusted · ' + (pi.taxInvoiceNo || ''), piId: pi.id, entryId: e.id, party: c, sac: piSac(pi), rate: +e.gstRate, taxable: -e.taxable, ...Object.fromEntries(Object.entries(headsOf(e.gstType, +e.gstAmount)).map(([k, v]) => [k, -v])) });
-      }
-    }
-  }
-  // receipts from clients with GST that aren't linked to any PI: treated as advances (no invoice yet)
-  Calc.live().filter(e => e.type === 'inflow' && !e.piId && +e.gstAmount > 0 && ymOf(e.date) === ym).forEach(e => {
-    const c = api.get('parties', e.partyId); rows.push({ kind: 'advance', date: e.date, no: 'Receipt ' + (e.refNo || e.txnRef || ''), entryId: e.id, party: c, sac: (api.get('categories', e.categoryId) || {}).sac || '998391', rate: +e.gstRate, taxable: +e.taxable, ...headsOf(e.gstType, +e.gstAmount), noPI: true });
-  });
-  (Store.data.creditNotes || []).filter(x => !x.deleted && ymOf(x.date) === ym).forEach(cn => {
-    const pi = api.get('pis', cn.piId), c = api.get('parties', cn.clientId);
-    rows.push({ kind: 'cn', date: cn.date, no: cn.cnNo + (pi ? ' (against ' + (pi.taxInvoiceNo || pi.piNo) + ')' : ''), piId: cn.piId, cnId: cn.id, party: c, sac: pi ? piSac(pi) : '998391', rate: +cn.gstRate, taxable: -cn.taxable, ...Object.fromEntries(Object.entries(headsOf(cn.gstType, +cn.gstAmount)).map(([k, v]) => [k, -v])) });
-  });
-  return rows.sort((a, b) => a.date.localeCompare(b.date));
-}
-/** Inward rows for a month: paid bills by bill date, plus bills logged before payment. */
-function purchaseRows(ym) {
-  const es = Calc.live().filter(e => e.type === 'outflow' && +e.gstAmount > 0 && ymOf(e.billDate || e.date) === ym);
-  const rows = es.map(e => { const p = api.get('parties', e.partyId); return { src: 'entry', id: e.id, entryId: e.id, date: e.billDate || e.date, paidOn: e.date, no: e.refNo || '', party: p, gstin: p ? p.gstin : '', category: nameOf('categories', e.categoryId), rate: +e.gstRate, taxable: +e.taxable, ...headsOf(e.gstType, +e.gstAmount), eligible: !!e.itc }; });
-  const paidKeys = new Set(Calc.live().filter(e => e.type === 'outflow' && e.refNo).map(e => e.partyId + '|' + normInv(e.refNo)));
-  (Store.data.gstBills || []).filter(b => !b.deleted && ymOf(b.billDate) === ym && !paidKeys.has(b.vendorId + '|' + normInv(b.billNo))).forEach(b => {
-    const p = api.get('parties', b.vendorId); rows.push({ src: 'bill', id: b.id, billId: b.id, date: b.billDate, paidOn: null, no: b.billNo, party: p, gstin: p ? p.gstin : (b.gstin || ''), category: nameOf('categories', b.categoryId) || 'Bill (unpaid)', rate: +b.gstRate, taxable: +b.taxable, ...headsOf(b.gstType, +b.gstAmount), eligible: b.itc !== false });
-  });
-  return rows.sort((a, b) => a.date.localeCompare(b.date));
-}
-const _gstCache = new Map();
-/** Full working for a month, including credit carried in from earlier months. */
-function gstMonth(ym) {
-  const key = ym + '|' + Store.data.audit.length + '|' + (Store.data.gst2b || []).length;
-  if (_gstCache.has(key)) return _gstCache.get(key);
-  const G = gstState(), start = ymOf(Store.data.settings.openingDate || '2025-04-01');
-  let carry = { igst: +G.openingCredit.igst || 0, cgst: +G.openingCredit.cgst || 0, sgst: +G.openingCredit.sgst || 0 };
-  let res = null;
-  for (let m = start; m <= ym; m = addMonths(m, 1)) {
-    const prevKey = m + '|' + Store.data.audit.length + '|' + (Store.data.gst2b || []).length;
-    let r = _gstCache.get(prevKey);
-    if (!r || m === ym) r = computeGstMonth(m, carry);
-    _gstCache.set(prevKey, r); carry = r.carryOut; res = r;
-  }
-  if (_gstCache.size > 200) _gstCache.clear();
-  return res;
-}
-function computeGstMonth(ym, carryIn) {
-  const sales = salesRows(ym), purch = purchaseRows(ym);
-  const by = k => sales.filter(r => r.kind === k).reduce((a, r) => addH(a, r), ZERO());
-  const inv = addH(by('b2b'), by('b2c')), adv = by('advance'), adj = by('adjust'), cn = by('cn'), exp = by('export');
-  const out = addH(addH(addH(addH(ZERO(), inv), adv), adj), cn);
-  const itc = purch.filter(r => r.eligible).reduce((a, r) => addH(a, r), ZERO()), blocked = purch.filter(r => !r.eligible).reduce((a, r) => addH(a, r), ZERO());
-  // Rule 88A set-off: IGST credit → IGST, CGST, SGST; CGST credit → CGST, IGST; SGST credit → SGST, IGST
-  const L = { igst: Math.max(0, out.igst), cgst: Math.max(0, out.cgst), sgst: Math.max(0, out.sgst) };
-  const C = { igst: r2(carryIn.igst + itc.igst + Math.max(0, -out.igst)), cgst: r2(carryIn.cgst + itc.cgst + Math.max(0, -out.cgst)), sgst: r2(carryIn.sgst + itc.sgst + Math.max(0, -out.sgst)) };
-  const used = { igst: { igst: 0, cgst: 0, sgst: 0 }, cgst: { igst: 0, cgst: 0, sgst: 0 }, sgst: { igst: 0, cgst: 0, sgst: 0 } };
-  const use = (from, to) => { const x = Math.min(C[from], L[to]); C[from] = r2(C[from] - x); L[to] = r2(L[to] - x); used[from][to] = r2(used[from][to] + x); };
-  use('igst', 'igst'); use('igst', 'cgst'); use('igst', 'sgst'); use('cgst', 'cgst'); use('cgst', 'igst'); use('sgst', 'sgst'); use('sgst', 'igst');
-  const cash = { igst: r2(L.igst), cgst: r2(L.cgst), sgst: r2(L.sgst) }; cash.total = r2(cash.igst + cash.cgst + cash.sgst);
-  const paidE = Calc.live().filter(e => e.categoryId === 'cat_gstpay' && taxPeriodOf(e) === ym);
-  const st = (Store.data.gstMonths || {})[ym] || { status: 'draft' };
-  return { ym, sales, purch, inv, adv, adj, cn, exp, out, itc, blocked, carryIn: { ...carryIn }, used, cash, carryOut: { igst: C.igst, cgst: C.cgst, sgst: C.sgst }, paid: r2(sum(paidE, e => e.amount)), paidEntries: paidE, status: st };
-}
-/** Points the CA should see before filing. */
-function gstChecks(M) {
-  const out = [];
-  M.purch.filter(r => r.eligible && (!r.party || !r.party.gstin)).forEach(r => out.push({ sev: 'high', t: `GST claimed on a bill from ${r.party ? r.party.name : 'a vendor'} with no GSTIN`, d: `${r.no || 'No bill no.'} · ${fmtDate(r.date)} · ITC ${money(totH(r))}. An unregistered vendor can't charge GST; correct the bill or mark ITC ineligible.`, act: r.entryId ? ['open-entry', r.entryId] : null }));
-  M.purch.filter(r => r.party && r.party.gstin && r.party.gstin.length >= 2).forEach(r => { const same = r.party.gstin.slice(0, 2) === HOME_STATE; if ((same && r.igst) || (!same && (r.cgst || r.sgst))) out.push({ sev: 'med', t: `Tax type looks wrong on ${r.party.name}'s bill`, d: `${r.no} · vendor is in ${IN_STATES[r.party.gstin.slice(0, 2)] || 'another state'}, bill shows ${r.igst ? 'IGST' : 'CGST + SGST'}.`, act: r.entryId ? ['open-entry', r.entryId] : null }); });
-  M.purch.filter(r => !r.no).forEach(r => out.push({ sev: 'med', t: `Bill no. missing · ${r.party ? r.party.name : ''}`, d: `${fmtDate(r.date)} · ${money(r.taxable)}. Needed to match GSTR-2B.`, act: r.entryId ? ['open-entry', r.entryId] : null }));
-  M.sales.filter(r => r.kind === 'advance' && !(r.piId && (api.get('pis', r.piId) || {}).taxInvoiceDate)).forEach(r => out.push({ sev: 'med', t: `Advance received without a tax invoice · ${r.party ? r.party.name : ''}`, d: `${fmtDate(r.date)} · GST ${money(totH(r))} is payable this month as an advance. Issue the tax invoice to adjust it.`, act: r.piId ? ['open-pi', r.piId] : null }));
-  M.sales.filter(r => r.kind === 'b2c' && r.party && !isExportParty(r.party)).forEach(r => out.push({ sev: 'low', t: `Invoice to ${r.party.name} has no client GSTIN`, d: `${r.no} will be reported as B2C. Add their GSTIN if they are registered.`, act: ['open-party', r.party.id] }));
-  if (M.exp.taxable && !gstState().lut) out.push({ sev: 'high', t: 'Export invoices without an LUT on record', d: 'Zero-rated exports without GST need a valid LUT for the year. Add the LUT ARN in GST settings.', act: null });
-  const b2 = (Store.data.gst2b || []).filter(x => x.ym === M.ym);
-  if (!b2.length && M.ym < ymOf(TODAY)) out.push({ sev: 'low', t: 'GSTR-2B not uploaded', d: 'Upload it to confirm every input credit appears on the portal before filing.', act: ['gst-tab', '2b'] });
-  else if (b2.length) { const R = match2B(M); if (R.booksOnly.length) out.push({ sev: 'high', t: `${R.booksOnly.length} bill${R.booksOnly.length > 1 ? 's' : ''} not in GSTR-2B · ITC at risk ${money(sum(R.booksOnly, r => totH(r)))}`, d: 'Credit is allowed only when the bill appears in GSTR-2B (Rule 36(4)). Ask the vendors to file.', act: ['gst-tab', '2b'] }); if (R.portalOnly.length) out.push({ sev: 'med', t: `${R.portalOnly.length} bill${R.portalOnly.length > 1 ? 's' : ''} in GSTR-2B but not in the books`, d: `ITC ${money(sum(R.portalOnly, x => x.igst + x.cgst + x.sgst))} you may be missing.`, act: ['gst-tab', '2b'] }); }
-  if (M.cash.total > 0 && M.paid && Math.abs(M.paid - M.cash.total) > 1) out.push({ sev: 'med', t: `GST paid ${money(M.paid)} differs from the working ${money(M.cash.total)}`, d: 'Check the challan or the entries in this month.', act: null });
-  return out;
-}
-/* ---------- GSTR-2B ---------- */
-function parse2B(rows) {
-  for (let i = 0; i < Math.min(rows.length, 30); i++) {
-    const c = rows[i].map(x => String(x).toLowerCase().replace(/\s+/g, ' ').trim());
-    const ix = rx => c.findIndex(x => rx.test(x));
-    const m = { gstin: ix(/gstin/), name: ix(/trade|legal name|supplier name|name of supplier/), no: ix(/invoice (number|no)|note (number|no)|document (number|no)/), date: ix(/invoice date|note date|document date|^date/), taxable: ix(/taxable/), igst: ix(/integrated|igst/), cgst: ix(/central|cgst/), sgst: ix(/state|sgst|ut tax/), avail: ix(/itc availab/) };
-    if (m.gstin >= 0 && m.no >= 0 && m.taxable >= 0) {
-      const out = [];
-      for (let j = i + 1; j < rows.length; j++) {
-        const r = rows[j], g = String(r[m.gstin] || '').trim().toUpperCase(); if (!GSTIN_RE.test(g)) continue;
-        const num = k => m[k] >= 0 ? Math.abs(parseBankAmt(r[m[k]]) || 0) : 0;
-        out.push({ gstin: g, name: m.name >= 0 ? String(r[m.name] || '').trim() : '', no: String(r[m.no] || '').trim(), date: m.date >= 0 ? parseBankDate(r[m.date]) : null, taxable: num('taxable'), igst: num('igst'), cgst: num('cgst'), sgst: num('sgst'), avail: m.avail >= 0 ? String(r[m.avail] || '').trim() : 'Yes' });
-      }
-      return out;
-    }
-  }
-  return null;
-}
-function match2B(M) {
-  const portal = (Store.data.gst2b || []).filter(x => x.ym === M.ym);
-  const books = M.purch.filter(r => r.eligible);
-  const used = new Set(), res = { matched: [], booksOnly: [], portalOnly: [] };
-  for (const r of books) {
-    const g = r.party && r.party.gstin; let hit = null;
-    if (g) hit = portal.find(x => !used.has(x.id) && x.gstin === g && normInv(x.no) === normInv(r.no)) || portal.find(x => !used.has(x.id) && x.gstin === g && Math.abs(x.taxable - r.taxable) <= 1);
-    if (hit) { used.add(hit.id); const diff = r2(totH(r) - (hit.igst + hit.cgst + hit.sgst)); res.matched.push({ r, x: hit, diff, byNo: normInv(hit.no) === normInv(r.no) }); } else res.booksOnly.push(r);
-  }
-  res.portalOnly = portal.filter(x => !used.has(x.id));
-  return res;
-}
-async function import2B(file, ym) {
-  let rows; try { const raw = await readSheetRows(file); rows = parse2B(raw); } catch (err) { return toast(err.message, 'error'); }
-  if (!rows || !rows.length) return toast('No B2B invoices found. Use the GSTR-2B Excel downloaded from the GST portal.', 'error');
-  Store.data.gst2b = (Store.data.gst2b || []).filter(x => x.ym !== ym);
-  rows.forEach(r => Store.data.gst2b.push({ id: uid('g2b'), ym, ...r }));
-  api.log('create', 'gst2b', ym, `GSTR-2B uploaded for ${monthLabel(ym, true)} · ${rows.length} invoices`); Store.persist();
-  S.gst.tab = '2b'; render({ keepScroll: true }); toast(`GSTR-2B for ${monthLabel(ym, true)}: ${rows.length} invoices`);
-}
-function sample2B(ym) {
-  const M = gstMonth(ym), rows = [['', '', '', 'Invoice details', '', '', '', '', '', 'Tax amount'], ['GSTIN of supplier', 'Trade/Legal name', 'Invoice number', 'Invoice type', 'Invoice Date', 'Invoice Value(₹)', 'Place of supply', 'Supply Attract Reverse Charge', 'Taxable Value (₹)', 'Integrated Tax(₹)', 'Central Tax(₹)', 'State/UT Tax(₹)', 'Cess(₹)', 'GSTR-1/IFF/GSTR-5 Period', 'GSTR-1/IFF/GSTR-5 Filing Date', 'ITC Availability']];
-  const elig = M.purch.filter(r => r.eligible && r.party && r.party.gstin);
-  elig.forEach((r, i) => {
-    if (i === Math.floor(elig.length / 2)) return;
-    const no = i === 1 ? String(r.no).replace(/\//g, '-') : r.no, d = r.date;
-    rows.push([r.party.gstin, r.party.name.toUpperCase(), no, 'Regular', `${d.slice(8)}-${d.slice(5, 7)}-${d.slice(0, 4)}`, (r.taxable + totH(r)).toFixed(2), IN_STATES[r.party.gstin.slice(0, 2)] || '', 'No', r.taxable.toFixed(2), r.igst.toFixed(2), r.cgst.toFixed(2), r.sgst.toFixed(2), '0.00', monthLabel(ym, true), addDays(ymDate(addMonths(ym, 1), 11), 0), 'Yes']);
-  });
-  rows.push(['27AAPCA1234K1Z9', 'APEX STATIONERS LLP', 'APX/2627/0412', 'Regular', `14-${ym.slice(5)}-${ym.slice(0, 4)}`, '7080.00', 'Maharashtra', 'No', '6000.00', '0.00', '540.00', '540.00', '0.00', monthLabel(ym, true), '', 'Yes']);
-  return rows.map(r => r.map(c => /[",]/.test(String(c)) ? '"' + String(c).replace(/"/g, '""') + '"' : c).join(',')).join('\n');
-}
-/* ---------- tax invoices & credit notes ---------- */
-function nextDocNo(prefix, fy, list) {
-  const yy = `${String(fy % 100).padStart(2, '0')}-${String((fy + 1) % 100).padStart(2, '0')}`;
-  const nums = list.filter(n => n && n.includes(yy)).map(n => +(String(n).match(/(\d+)\s*$/) || [0, 0])[1] || 0);
-  return `${prefix}${yy}/${String(Math.max(0, ...nums) + 1).padStart(3, '0')}`;
-}
-const nextInvoiceNo = date => nextDocNo(gstState().invPrefix || 'INV/', fyOf(date), api.list('pis').map(p => p.taxInvoiceNo).filter(n => /^INV|^TI/.test(n || '')));
-const nextCNNo = date => nextDocNo(gstState().cnPrefix || 'CN/', fyOf(date), (Store.data.creditNotes || []).map(c => c.cnNo));
-function gstLocked(ym) { const s = (Store.data.gstMonths || {})[ym]; return s && s.status === 'confirmed'; }
-function assertGstOpen(yms, what) { const y = [...new Set(yms.filter(Boolean))].find(gstLocked); if (y) throw new Error(`GST for ${monthLabel(y, true)} is confirmed by the CA. Reopen it in GST returns before changing ${what}.`); }
-async function issueTaxInvoice(piId, date, no) {
-  const pi = api.get('pis', piId); if (!pi) return;
-  assertGstOpen([ymOf(date)], 'this invoice');
-  no = no || nextInvoiceNo(date);
-  if (api.list('pis').some(p => p.id !== piId && p.taxInvoiceNo === no)) throw new Error('Tax invoice no. ' + no + ' is already used');
-  await api.update('pis', piId, { taxInvoiceNo: no, taxInvoiceDate: date }, { summary: `Tax invoice ${no} issued for PI ${pi.piNo} · ${fmtDate(date)}` });
-  return no;
-}
-function taxInvoiceModal(piId) {
-  const pi = api.get('pis', piId); const d0 = (Sales.piCollected(pi).entries[0] || {}).date || TODAY;
-  const ov = openModal(`<div class="modal-h"><h2>Issue tax invoice</h2><span class="muted" style="font-size:12.5px">${esc(pi.piNo)}</span></div><div class="modal-b"><div class="fgrid c2">
-    <div class="field"><label>Invoice date</label><input class="input" type="date" id="tiDate" value="${d0 > TODAY ? TODAY : d0}"><div class="hint">GST on ${money(pi.taxable)} falls in this month</div></div>
-    <div class="field"><label>Invoice no.</label><input class="input mono" id="tiNo" value="${esc(nextInvoiceNo(d0))}"></div></div></div>
-    <div class="modal-f"><button class="btn" data-x="no">Cancel</button><button class="btn btn-gold" data-x="yes">Issue</button></div>`, 'sm');
-  $('#tiDate', ov).addEventListener('change', ev => { $('#tiNo', ov).value = nextInvoiceNo(ev.target.value); });
-  ov.addEventListener('click', async ev => { const b = ev.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'no') return ov.remove(); try { const no = await issueTaxInvoice(piId, $('#tiDate', ov).value, $('#tiNo', ov).value.trim()); ov.remove(); toast('Tax invoice ' + no + ' issued'); openPI(piId); } catch (err) { toast(err.message, 'error'); } });
-}
-function creditNoteModal(piId) {
-  const pi = api.get('pis', piId);
-  const done = sum((Store.data.creditNotes || []).filter(x => !x.deleted && x.piId === piId), x => x.taxable);
-  const ov = openModal(`<div class="modal-h"><h2>Credit note</h2><span class="muted" style="font-size:12.5px">against ${esc(pi.taxInvoiceNo)}</span></div><div class="modal-b"><div class="fgrid c2">
-    <div class="field"><label>Date</label><input class="input" type="date" id="cnDate" value="${TODAY}"></div><div class="field"><label>Credit note no.</label><input class="input mono" id="cnNo" value="${esc(nextCNNo(TODAY))}"></div>
-    <div class="field"><label>Value before GST (₹)</label><input class="input num" type="number" id="cnAmt" min="0" max="${pi.taxable - done}" step="0.01"><div class="hint">Up to ${money(pi.taxable - done)} · GST ${pi.gstRate}% added</div></div>
-    <div class="field"><label>Reason</label><select class="select" id="cnWhy">${opts([['Discount', 'Discount after invoice'], ['Scope reduced', 'Scope reduced'], ['Cancelled', 'Invoice cancelled'], ['Correction', 'Correction of value']], 'Discount')}</select></div></div>
-    <div class="hint">Reduces output GST in the credit note's month and the balance due on the PI.</div></div>
-    <div class="modal-f"><button class="btn" data-x="no">Cancel</button><button class="btn btn-gold" data-x="yes">Save credit note</button></div>`, 'sm');
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'no') return ov.remove();
-    const amt = r2(+$('#cnAmt', ov).value || 0), date = $('#cnDate', ov).value;
-    if (!(amt > 0) || amt > pi.taxable - done + 0.01) return toast('Enter a value up to ' + money(pi.taxable - done), 'error');
-    try { assertGstOpen([ymOf(date)], 'credit notes');
-      await api.create('creditNotes', { piId, clientId: pi.clientId, date, cnNo: $('#cnNo', ov).value.trim(), taxable: amt, gstRate: pi.gstRate, gstType: pi.gstType, gstAmount: r2(amt * pi.gstRate / 100), reason: $('#cnWhy', ov).value, deleted: false }, { summary: `Credit note ${$('#cnNo', ov).value.trim()} · ${money(amt)} against ${pi.taxInvoiceNo}` });
-      ov.remove(); toast('Credit note saved'); openPI(piId); } catch (err) { toast(err.message, 'error'); }
-  });
-}
-function gstSectionHTML(pi) {
-  if (pi.status === 'cancelled') return '';
-  const can = api.can('gst.edit'), cns = (Store.data.creditNotes || []).filter(x => !x.deleted && x.piId === pi.id);
-  return `<div class="fsec-h" style="margin-top:22px">GST</div><div class="rm-box">${pi.taxInvoiceNo && pi.taxInvoiceDate ? `<div class="row" style="gap:8px;flex-wrap:wrap"><span class="chip inflow">Tax invoice ${esc(pi.taxInvoiceNo)}</span><span class="muted" style="font-size:12.5px">${fmtDate(pi.taxInvoiceDate)} · GST in ${monthLabel(ymOf(pi.taxInvoiceDate), true)}${gstLocked(ymOf(pi.taxInvoiceDate)) ? ' · confirmed' : ''}</span></div>` : `<div class="muted" style="font-size:13px">No tax invoice yet. ${Sales.piCollected(pi).entries.length ? '<span class="out">Payment received — GST is due as an advance until you issue it.</span>' : 'Issue it when the client pays (or earlier if agreed).'}</div>`}
-    ${cns.map(c => `<div class="list-row" style="padding:6px 0"><span class="grow" style="font-size:13px">Credit note ${esc(c.cnNo)} · ${fmtDate(c.date)} · ${esc(c.reason)}</span><span class="num out">−${money(c.taxable + c.gstAmount)}</span></div>`).join('')}
-    ${can ? `<div class="row" style="gap:8px;margin-top:8px">${!pi.taxInvoiceDate ? `<button class="btn btn-sm" data-act="gst-ti" data-id="${pi.id}">Issue tax invoice</button>` : `<button class="btn btn-sm btn-ghost" data-act="gst-cn" data-id="${pi.id}">Issue credit note</button>`}</div>` : ''}</div>`;
-}
-/* lock: entries that touch a confirmed GST month */
-(() => {
-  const gm = e => !e ? [] : e.type === 'outflow' && +e.gstAmount > 0 ? [ymOf(e.billDate || e.date)] : e.type === 'inflow' && +e.gstAmount > 0 ? (() => { const pi = e.piId && api.get('pis', e.piId); return [!pi || !pi.taxInvoiceDate || ymOf(e.date) < ymOf(pi.taxInvoiceDate) ? ymOf(e.date) : null]; })() : [];
-  const save = api.saveEntry.bind(api), del = api.softDelete.bind(api);
-  api.saveEntry = async (input, id) => { const old = id ? api.get('entries', id) : null; const n = api.normaliseEntry(input); const touches = old ? ['gstAmount', 'taxable', 'gstRate', 'gstType', 'itc', 'billDate', 'date', 'refNo', 'partyId', 'piId'].some(k => String(old[k] ?? '') !== String(n[k] ?? '')) : true; if (touches) assertGstOpen([...gm(old), ...gm(n)], 'this entry'); return save(input, id); };
-  api.softDelete = async id => { assertGstOpen(gm(api.get('entries', id)), 'this entry'); return del(id); };
-})();
-/* ---------- Excel pack ---------- */
-function gstPackSheets(ym) {
-  const M = gstMonth(ym), co = Store.data.settings.company, gstin = Store.data.settings.gstin || '';
-  const H = h => [h.taxable, h.igst, h.cgst, h.sgst, r2(h.igst + h.cgst + h.sgst)];
-  const summary = [[`${co} · GSTIN ${gstin}`], [`GST working for ${monthLabel(ym, true)} · prepared ${fmtDate(TODAY)} · status ${GST_STATUS[M.status.status || 'draft'][0]}`], [],
-    ['Section', 'Taxable value', 'IGST', 'CGST', 'SGST', 'Total tax'],
-    ['3.1(a) Tax invoices (B2B + B2C)', ...H(M.inv)], ['  Advances received (no invoice yet)', ...H(M.adv)], ['  Less: advances adjusted', ...H(M.adj)], ['  Less: credit notes', ...H(M.cn)], ['Net output tax', ...H(M.out)],
-    ['3.1(b) Zero-rated exports under LUT', M.exp.taxable, 0, 0, 0, 0], [],
-    ['4(A)(5) Eligible ITC (bills)', ...H(M.itc)], ['4(D) Ineligible / blocked ITC', ...H(M.blocked)], ['Credit brought forward', '', M.carryIn.igst, M.carryIn.cgst, M.carryIn.sgst, r2(M.carryIn.igst + M.carryIn.cgst + M.carryIn.sgst)], [],
-    ['Payable in cash', '', M.cash.igst, M.cash.cgst, M.cash.sgst, M.cash.total], ['Credit carried forward', '', M.carryOut.igst, M.carryOut.cgst, M.carryOut.sgst, r2(M.carryOut.igst + M.carryOut.cgst + M.carryOut.sgst)], ['GST paid (challans recorded)', '', '', '', '', M.paid], [],
-    ['Set-off (credit used)', 'From IGST', 'From CGST', 'From SGST'], ['Against IGST', M.used.igst.igst, M.used.cgst.igst, M.used.sgst.igst], ['Against CGST', M.used.igst.cgst, M.used.cgst.cgst, 0], ['Against SGST', M.used.igst.sgst, 0, M.used.sgst.sgst]];
-  const KIND = { b2b: 'B2B', b2c: 'B2C', export: 'Export (LUT)', advance: 'Advance', adjust: 'Advance adjusted', cn: 'Credit note' };
-  const sales = [['Type', 'Date', 'Invoice / document', 'Client', 'Client GSTIN', 'Place of supply', 'SAC', 'Rate %', 'Taxable value', 'IGST', 'CGST', 'SGST', 'Invoice value'], ...M.sales.map(r => [KIND[r.kind], fmtDate(r.date), r.no, r.party ? r.party.name : '', r.party ? r.party.gstin || '' : '', posOf(r.party), r.sac, r.rate, r.taxable, r.igst, r.cgst, r.sgst, r2(r.taxable + totH(r))]), ['', '', 'Total', '', '', '', '', '', ...H(M.sales.reduce((a, r) => addH(a, r), ZERO())).slice(0, 4), '']];
-  const pur = [['Bill date', 'Bill no.', 'Vendor', 'Vendor GSTIN', 'Category', 'Rate %', 'Taxable value', 'IGST', 'CGST', 'SGST', 'ITC', 'Paid on'], ...M.purch.map(r => [fmtDate(r.date), r.no, r.party ? r.party.name : '', r.party ? r.party.gstin || '' : '', r.category, r.rate, r.taxable, r.igst, r.cgst, r.sgst, r.eligible ? 'Eligible' : 'Ineligible', r.paidOn ? fmtDate(r.paidOn) : 'Unpaid'])];
-  const sac = {}; M.sales.filter(r => r.kind !== 'export').forEach(r => { const k = r.sac + '|' + r.rate; sac[k] = addH(sac[k] || ZERO(), r); });
-  M.sales.filter(r => r.kind === 'export').forEach(r => { const k = r.sac + '|0'; sac[k] = addH(sac[k] || ZERO(), r); });
-  const hsn = [['SAC', 'Description', 'Rate %', 'Taxable value', 'IGST', 'CGST', 'SGST', 'Total tax'], ...Object.entries(sac).map(([k, h]) => { const [code, rate] = k.split('|'); return [code, SAC_DESC[code] || '', +rate, h.taxable, h.igst, h.cgst, h.sgst, totH(h)]; })];
-  const parties = [['Clients', 'GSTIN', 'Taxable value', 'Output tax'], ...partyTotals(M.sales).map(x => [x.p ? x.p.name : '', x.p ? x.p.gstin || '' : '', x.h.taxable, totH(x.h)]), [], ['Vendors', 'GSTIN', 'Taxable value', 'ITC eligible', 'ITC ineligible'], ...vendorTotals(M.purch).map(x => [x.p ? x.p.name : '', x.p ? x.p.gstin || '' : '', x.t, x.e, x.b])];
-  const sheets = [['Summary 3B', summary], ['Sales register', sales], ['Purchase register', pur], ['SAC summary', hsn], ['Party-wise', parties]];
-  if ((Store.data.gst2b || []).some(x => x.ym === ym)) { const R = match2B(M); sheets.push(['GSTR-2B match', [['Status', 'Vendor', 'GSTIN', 'Bill no. (books)', 'Invoice no. (2B)', 'Taxable', 'Tax (books)', 'Tax (2B)'], ...R.matched.map(m => ['Matched', m.r.party.name, m.r.party.gstin, m.r.no, m.x.no, m.r.taxable, totH(m.r), r2(m.x.igst + m.x.cgst + m.x.sgst)]), ...R.booksOnly.map(r => ['Not in 2B', r.party ? r.party.name : '', r.party ? r.party.gstin : '', r.no, '', r.taxable, totH(r), '']), ...R.portalOnly.map(x => ['Only in 2B', x.name, x.gstin, '', x.no, x.taxable, '', r2(x.igst + x.cgst + x.sgst)])]]); }
-  const ch = gstChecks(M); if (ch.length) sheets.push(['Open points', [['Priority', 'Point', 'Detail'], ...ch.map(c => [c.sev, c.t, c.d])]]);
-  return sheets;
-}
-const SAC_DESC = { '998391': 'Specialty design services (incl. industrial design)', '998333': 'Industrial engineering services', '998393': 'Technical consulting', '998331': 'Engineering advisory services', '998311': 'Management consulting' };
-function partyTotals(rows) { const m = new Map(); rows.forEach(r => { const k = r.party ? r.party.id : '_'; const x = m.get(k) || { p: r.party, h: ZERO() }; addH(x.h, r); m.set(k, x); }); return [...m.values()].sort((a, b) => b.h.taxable - a.h.taxable); }
-function vendorTotals(rows) { const m = new Map(); rows.forEach(r => { const k = r.party ? r.party.id : '_'; const x = m.get(k) || { p: r.party, t: 0, e: 0, b: 0 }; x.t = r2(x.t + r.taxable); if (r.eligible) x.e = r2(x.e + totH(r)); else x.b = r2(x.b + totH(r)); m.set(k, x); }); return [...m.values()].sort((a, b) => b.t - a.t); }
-const xmlEsc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-async function gstPackFile(ym) {
-  const sheets = gstPackSheets(ym), name = `GST-working-${ym}-${(Store.data.settings.company || 'IUOVA').split(' ')[0]}`;
-  try {
-    await loadXLSX();
-    const wb = XLSX.utils.book_new();
-    sheets.forEach(([n, aoa]) => { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = (aoa[3] || aoa[0] || []).map((_, i) => ({ wch: i === 0 ? 34 : i < 6 ? 18 : 14 })); XLSX.utils.book_append_sheet(wb, ws, n.slice(0, 31)); });
-    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    return new File([buf], name + '.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  } catch (e) {
-    // offline fallback: Excel 2003 XML workbook (opens in Excel with all sheets)
-    const cell = v => typeof v === 'number' ? `<Cell><Data ss:Type="Number">${v}</Data></Cell>` : `<Cell><Data ss:Type="String">${xmlEsc(v)}</Data></Cell>`;
-    const xml = `<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${sheets.map(([n, aoa]) => `<Worksheet ss:Name="${xmlEsc(n.slice(0, 31))}"><Table>${aoa.map(r => `<Row>${r.map(cell).join('')}</Row>`).join('')}</Table></Worksheet>`).join('')}</Workbook>`;
-    return new File([xml], name + '.xml', { type: 'application/vnd.ms-excel' });
-  }
-}
-function downloadFile(f) { const url = URL.createObjectURL(f); const a = document.createElement('a'); a.href = url; a.download = f.name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500); }
-function gstEmailVars(ym) {
-  const M = gstMonth(ym), pad = (s, n, r) => { s = String(s); return r ? s.padStart(n) : s.padEnd(n); };
-  const line = (l, h) => `${pad(l, 34)}${pad(money(h.igst), 13, 1)}${pad(money(h.cgst), 13, 1)}${pad(money(h.sgst), 13, 1)}`;
-  const tbl = [`${pad('', 34)}${pad('IGST', 13, 1)}${pad('CGST', 13, 1)}${pad('SGST', 13, 1)}`, line('Output tax (net)', M.out), line('Eligible ITC', M.itc), line('Credit brought forward', M.carryIn), line('Payable in cash', M.cash), line('Credit carried forward', M.carryOut), '', `Sales (taxable): ${money(M.inv.taxable)} · Exports under LUT: ${money(M.exp.taxable)} · Purchases (taxable): ${money(sum(M.purch, r => r.taxable))}`, `Total GST payable in cash: ${money(M.cash.total)}`].join('\n');
-  const ch = gstChecks(M).filter(c => c.sev !== 'low');
-  return { month: monthLabel(ym, true), company: Store.data.settings.company, gst_summary: tbl, gst_checks: ch.length ? 'Points to note:\n' + ch.map(c => '• ' + c.t).join('\n') + '\n\n' : '' };
-}
-async function sendGstToCA(ym) {
-  if (!api.can('gst.send')) return toast('Not allowed for your role', 'error');
-  const G = gstState(); if (!G.caEmails || !G.caEmails.length) return toast('Add the CA\'s email in GST settings first', 'error');
-  const f = await gstPackFile(ym); const meta = { id: uid('f'), name: f.name, type: f.type, size: f.size }; await FileStore.put({ ...meta, blob: f });
-  const E = { kind: 'gst_pack', partyId: null, on: true, to: G.caEmails.slice(), newTo: '', saveNew: false, cc: (emailSettings().cc || []).join(', '), subject: '', body: '', edited: false, attachDocs: true, files: [], err: '' };
-  refreshEmail(E, gstEmailVars(ym));
-  const ov = openModal(`<div class="modal-h"><h2>Send GST working to CA</h2><span class="muted" style="font-size:12.5px">${monthLabel(ym, true)}</span><span class="spacer"></span><button class="icon-btn" data-c="close">${icon('x')}</button></div><div class="modal-b" id="gEm"></div>
-    <div class="modal-f"><button class="btn" data-c="dl">${icon('file')} Download Excel</button><span class="spacer"></span><button class="btn" data-c="close">Cancel</button><button class="btn btn-gold" data-c="send">${icon('send')} Queue email</button></div>`, 'xl');
-  const body = $('#gEm', ov); const draw = () => { body.innerHTML = `<div class="muted" style="font-size:13px;margin-bottom:10px">Attached: <b>${esc(f.name)}</b> (${Math.round(f.size / 1024)} KB · ${gstPackSheets(ym).length} sheets)</div>` + emailBoxHTML(E, { docs: 1, standalone: true }); };
-  draw(); bindEmailEvents(body, () => E, draw);
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-c]'); if (!b) return;
-    if (b.dataset.c === 'close') return ov.remove();
-    if (b.dataset.c === 'dl') return downloadFile(f);
-    try {
-      checkEmail(E);
-      const m = await api.queueEmail({ kind: 'gst_pack', entity: 'gstMonths', entityId: ym, partyId: null, to: E.to, cc: splitEmails(E.cc), subject: E.subject, body: E.body, attachments: [meta] });
-      Store.data.gstMonths[ym] = { ...(Store.data.gstMonths[ym] || {}), status: 'sent', sentAt: nowISO(), emailId: m.id, by: api.me().id, snapshot: gstSnapshot(ym) };
-      api.log('update', 'gstMonths', ym, `GST working for ${monthLabel(ym, true)} sent to CA (${E.to.join(', ')})`); Store.persist();
-      ov.remove(); toast('Queued to ' + E.to.join(', ')); render({ keepScroll: true });
-    } catch (err) { toast(err.message, 'error'); }
-  });
-}
-function gstSnapshot(ym) { const M = gstMonth(ym); return { out: totH(M.out), itc: totH(M.itc), cash: M.cash.total, sales: M.sales.length, purch: M.purch.length, at: nowISO() }; }
-/* ---------- page ---------- */
-const gstMoney = v => v ? money(v) : '<span class="faint">–</span>';
-PAGES.gst = {
-  title: 'GST returns',
-  render() {
-    featureSettings();
-    if (!S.gst.ym) S.gst.ym = addMonths(ymOf(TODAY), -1);
-    const ym = S.gst.ym, M = gstMonth(ym), st = M.status.status || 'draft', can = api.can('gst.edit'), T = S.gst.tab;
-    const fy = fyOf(ym + '-01'), months = fyMonths(fy).filter(m => m <= ymOf(TODAY));
-    const strip = `<div class="gst-strip">${months.map(m => { const X = gstMonth(m), s2 = (X.status.status || 'draft'); return `<button class="gst-m ${m === ym ? 'on' : ''} ${s2}" data-act="gst-month" data-v="${m}"><span>${monthLabel(m)}</span><b class="num">${X.cash.total ? shortMoney(X.cash.total) : X.out.igst + X.out.cgst + X.out.sgst ? 'Nil' : '—'}</b><i class="gst-dot ${s2}"></i></button>`; }).join('')}</div>`;
-    const changed = st !== 'draft' && M.status.snapshot && Math.abs(M.status.snapshot.cash - M.cash.total) > 1;
-    const ch = gstChecks(M);
-    const head = `<div class="bk-bar"><div class="row gst-nav" style="gap:8px"><button class="icon-btn" data-act="gst-step" data-v="-1" title="Previous month">${icon('chev').replace('<svg', '<svg style="transform:rotate(180deg)"')}</button><div><div style="font:600 18px var(--f-head)">${monthLabel(ym, true)}</div><div class="muted" style="font-size:12.5px">GSTR-1 due ${fmtDate(ymDate(addMonths(ym, 1), 11))} · GSTR-3B due ${fmtDate(ymDate(addMonths(ym, 1), 20))}</div></div><button class="icon-btn" data-act="gst-step" data-v="1" title="Next month" ${ym >= ymOf(TODAY) ? 'disabled' : ''}>${icon('chev')}</button>
-      <span class="chip ${GST_STATUS[st][1]}" style="margin-left:6px">${GST_STATUS[st][0]}${st === 'sent' && M.status.sentAt ? ' · ' + fmtDate(M.status.sentAt.slice(0, 10)) : ''}${st === 'confirmed' && M.status.confirmedAt ? ' · ' + fmtDate(M.status.confirmedAt.slice(0, 10)) : ''}</span></div><span class="spacer"></span>
-      <button class="btn btn-sm" data-act="gst-dl">${icon('file')} Download Excel</button>
-      ${st !== 'confirmed' && api.can('gst.send') ? `<button class="btn btn-sm ${st === 'draft' ? 'btn-gold' : ''}" data-act="gst-send">${icon('send')} ${st === 'sent' ? 'Send again' : 'Send to CA'}</button>` : ''}
-      ${st === 'sent' && api.can('gst.confirm') ? `<button class="btn btn-sm btn-navy" data-act="gst-confirm">${icon('check')} CA confirmed</button>` : ''}
-      ${st === 'confirmed' && api.can('settings.edit') ? `<button class="btn btn-sm btn-ghost" data-act="gst-reopen">Reopen</button>` : ''}</div>`;
-    const kpis = `<div class="grid g-kpi gst-kpis">
-      <div class="card kpi"><div class="k-l">Output GST</div><div class="k-v">${money(totH(M.out))}</div><div class="k-s">on ${money(M.inv.taxable + M.adv.taxable + M.adj.taxable + M.cn.taxable)} taxable${M.exp.taxable ? ' + ' + money(M.exp.taxable) + ' exports' : ''}</div></div>
-      <div class="card kpi"><div class="k-l">Input credit (ITC)</div><div class="k-v in">${money(totH(M.itc))}</div><div class="k-s">${M.purch.filter(r => r.eligible).length} bills${totH(M.blocked) ? ' · ' + money(totH(M.blocked)) + ' blocked' : ''}</div></div>
-      <div class="card kpi accent"><div class="k-l">Payable in cash</div><div class="k-v">${money(M.cash.total)}</div><div class="k-s">after ${money(totH(M.carryIn))} credit b/f</div></div>
-      <div class="card kpi"><div class="k-l">Paid</div><div class="k-v ${M.paid >= M.cash.total - 1 ? 'in' : 'out'}">${M.paid ? money(M.paid) : M.cash.total ? 'Not yet' : '—'}</div><div class="k-s">${M.paidEntries.map(e => fmtDate(e.date)).join(', ') || (M.cash.total ? 'Record it from Compliance' : 'Nothing to pay')}</div></div>
-      <div class="card kpi"><div class="k-l">Credit carried forward</div><div class="k-v">${money(totH(M.carryOut))}</div><div class="k-s">IGST ${shortMoney(M.carryOut.igst)} · CGST ${shortMoney(M.carryOut.cgst)} · SGST ${shortMoney(M.carryOut.sgst)}</div></div></div>`;
-    const banner = changed ? `<div class="notice" style="border-color:#F0C9C3;background:var(--out-soft)">${icon('alert')}<div><b>Figures changed after ${st === 'confirmed' ? 'confirmation' : 'sending'}.</b> Cash payable was ${money(M.status.snapshot.cash)}, now ${money(M.cash.total)}. ${st === 'sent' ? 'Send the working again.' : 'Reopen the month to review.'}</div></div>` : st === 'confirmed' ? `<div class="notice info">${icon('lock')}<div>Confirmed by the CA${M.status.note ? ' · ' + esc(M.status.note) : ''}. Entries, invoices and credit notes in this GST month can't be changed until the Owner reopens it.</div></div>` : '';
-    const tabs = `<div class="tabs" style="margin-top:2px">${[['summary', 'GSTR-3B working'], ['sales', 'Sales', M.sales.length], ['purchases', 'Purchases', M.purch.length], ['sac', 'SAC summary'], ['party', 'Party-wise'], ['2b', 'GSTR-2B', (Store.data.gst2b || []).filter(x => x.ym === ym).length || ''], ['checks', 'Checks', ch.length]].map(([k, l, n]) => `<button class="${T === k ? 'on' : ''}" data-act="gst-tab" data-v="${k}">${l}${n !== undefined && n !== '' ? ` <span class="tw-n">${n}</span>` : ''}</button>`).join('')}</div>`;
-    const hRow = (l, h, cls = '', taxable = true) => `<tr class="${cls}"><td>${l}</td><td class="num">${taxable ? gstMoney(h.taxable) : ''}</td><td class="num">${gstMoney(h.igst)}</td><td class="num">${gstMoney(h.cgst)}</td><td class="num">${gstMoney(h.sgst)}</td><td class="num"><b>${gstMoney(totH(h))}</b></td></tr>`;
-    let body = '';
-    if (T === 'summary') {
-      body = `<div class="card"><div class="tbl-wrap"><table class="tbl gst-3b"><thead><tr><th></th><th class="num">Taxable</th><th class="num">IGST</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">Total tax</th></tr></thead><tbody>
-        <tr class="grp"><td colspan="6">Outward supplies · 3.1</td></tr>
-        ${hRow('Tax invoices issued (B2B + B2C)', M.inv)}${M.adv.taxable ? hRow('Advances received, no invoice yet', M.adv) : ''}${M.adj.taxable ? hRow('Less: advances adjusted on invoicing', M.adj) : ''}${M.cn.taxable ? hRow('Less: credit notes', M.cn) : ''}
-        ${hRow('Net output tax', M.out, 'tot')}
-        <tr><td>Zero-rated exports under LUT · 3.1(b)</td><td class="num">${gstMoney(M.exp.taxable)}</td><td class="num" colspan="4"><span class="muted" style="font-size:12px">${gstState().lut ? 'LUT ' + esc(gstState().lut) : '<span class="out">No LUT on record</span>'}</span></td></tr>
-        <tr class="grp"><td colspan="6">Input tax credit · 4</td></tr>
-        ${hRow('Eligible ITC on bills · 4(A)(5)', M.itc)}${totH(M.blocked) ? hRow('Ineligible ITC (not claimed) · 4(D)', M.blocked, 'muted-row') : ''}
-        ${hRow('Credit brought forward', { taxable: 0, ...M.carryIn }, '', false)}
-        <tr class="grp"><td colspan="6">Set-off (Rule 88A order)</td></tr>
-        <tr><td>Credit used against IGST</td><td></td><td class="num">${gstMoney(r2(M.used.igst.igst + M.used.cgst.igst + M.used.sgst.igst))}</td><td colspan="3" class="muted" style="font-size:12px">from IGST ${money(M.used.igst.igst)} · CGST ${money(M.used.cgst.igst)} · SGST ${money(M.used.sgst.igst)}</td></tr>
-        <tr><td>Credit used against CGST</td><td></td><td></td><td class="num">${gstMoney(r2(M.used.igst.cgst + M.used.cgst.cgst))}</td><td colspan="2" class="muted" style="font-size:12px">from IGST ${money(M.used.igst.cgst)} · CGST ${money(M.used.cgst.cgst)}</td></tr>
-        <tr><td>Credit used against SGST</td><td></td><td></td><td></td><td class="num">${gstMoney(r2(M.used.igst.sgst + M.used.sgst.sgst))}</td><td class="muted" style="font-size:12px">from IGST ${money(M.used.igst.sgst)} · SGST ${money(M.used.sgst.sgst)}</td></tr>
-        ${hRow('Payable in cash', { taxable: 0, ...M.cash }, 'net', false)}${hRow('Credit carried forward', { taxable: 0, ...M.carryOut }, '', false)}
-        </tbody></table></div></div>${ch.length ? `<div class="card"><div class="card-h"><div class="grow"><h3>Before sending to the CA</h3><div class="sub">${ch.length} point${ch.length > 1 ? 's' : ''} found in this month's records</div></div><button class="btn btn-sm" data-act="gst-tab" data-v="checks">See all</button></div>${ch.slice(0, 4).map(gstCheckRow).join('')}</div>` : ''}`;
-    } else if (T === 'sales') {
-      const KL = { b2b: ['B2B', 'inflow'], b2c: ['B2C', ''], export: ['Export · LUT', 'transfer'], advance: ['Advance', 'gold'], adjust: ['Adv. adjusted', ''], cn: ['Credit note', 'overdue'] };
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Sales register</h3><div class="sub">Tax invoices by invoice date, advances by receipt date, credit notes by their date</div></div></div><div class="tbl-wrap"><table class="tbl gst-reg"><thead><tr><th>Date</th><th>Document</th><th>Client · GSTIN</th><th>SAC</th><th class="num">Taxable</th><th class="num">IGST</th><th class="num">CGST</th><th class="num">SGST</th><th></th></tr></thead><tbody>
-        ${M.sales.map(r => `<tr ${r.piId ? `data-act="open-pi" data-id="${r.piId}" style="cursor:pointer"` : r.entryId ? `data-act="open-entry" data-id="${r.entryId}" style="cursor:pointer"` : ''}><td class="nowrap">${fmtDate(r.date)}</td><td class="mono" style="font-size:12px">${esc(r.no)}</td><td><div class="cell-main">${esc(r.party ? r.party.name : '—')}</div><div class="cell-sub mono">${esc(r.party ? r.party.gstin || (isExportParty(r.party) ? 'Overseas' : 'Unregistered') : '')} · ${esc(posOf(r.party))}</div></td><td class="mono" style="font-size:12px">${esc(r.sac)}</td><td class="num">${money(r.taxable)}</td><td class="num">${gstMoney(r.igst)}</td><td class="num">${gstMoney(r.cgst)}</td><td class="num">${gstMoney(r.sgst)}</td><td><span class="chip ${KL[r.kind][1]}">${KL[r.kind][0]}</span></td></tr>`).join('') || '<tr><td colspan="9"><div class="empty">No sales documents in this month.</div></td></tr>'}
-        </tbody>${M.sales.length ? `<tfoot><tr><td colspan="4">Total</td><td class="num">${money(sum(M.sales, r => r.taxable))}</td><td class="num">${money(sum(M.sales, r => r.igst))}</td><td class="num">${money(sum(M.sales, r => r.cgst))}</td><td class="num">${money(sum(M.sales, r => r.sgst))}</td><td></td></tr></tfoot>` : ''}</table></div></div>`;
-    } else if (T === 'purchases') {
-      const R = (Store.data.gst2b || []).some(x => x.ym === ym) ? match2B(M) : null; const s2b = r => !R ? '' : R.matched.some(m => m.r === r) ? '<span class="chip inflow">In 2B</span>' : r.eligible ? '<span class="chip overdue">Not in 2B</span>' : '';
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Purchase register</h3><div class="sub">By bill date. Untick ITC for blocked credits (food, gifts, personal use).</div></div>${can ? `<button class="btn btn-sm" data-act="gst-bill">${icon('plus')} Log an unpaid bill</button>` : ''}</div><div class="tbl-wrap"><table class="tbl gst-reg"><thead><tr><th>Bill date</th><th>Bill no.</th><th>Vendor · GSTIN</th><th>Category</th><th class="num">Taxable</th><th class="num">IGST</th><th class="num">CGST</th><th class="num">SGST</th><th>ITC</th><th></th></tr></thead><tbody>
-        ${M.purch.map(r => `<tr><td class="nowrap">${fmtDate(r.date)}<div class="cell-sub">${r.paidOn ? 'paid ' + fmtDate(r.paidOn) : '<span class="out">unpaid</span>'}</div></td><td class="mono" style="font-size:12px">${r.entryId ? `<a href="#" data-act="open-entry" data-id="${r.entryId}">${esc(r.no || '—')}</a>` : esc(r.no)}</td><td><div class="cell-main">${esc(r.party ? r.party.name : '—')}</div><div class="cell-sub mono ${r.party && r.party.gstin ? '' : 'out'}">${esc(r.party && r.party.gstin ? r.party.gstin : 'No GSTIN')}</div></td><td style="font-size:12.5px">${esc(r.category)}</td><td class="num">${money(r.taxable)}</td><td class="num">${gstMoney(r.igst)}</td><td class="num">${gstMoney(r.cgst)}</td><td class="num">${gstMoney(r.sgst)}</td>
-          <td>${can && st !== 'confirmed' ? `<label class="check" style="font-size:12.5px"><input type="checkbox" data-gst-itc="${r.src}:${r.id}" ${r.eligible ? 'checked' : ''}> ${r.eligible ? 'Claim' : 'Blocked'}</label>` : r.eligible ? 'Claim' : 'Blocked'}</td><td>${s2b(r)}</td></tr>`).join('') || '<tr><td colspan="10"><div class="empty">No purchase bills with GST in this month.</div></td></tr>'}
-        </tbody>${M.purch.length ? `<tfoot><tr><td colspan="4">Total · eligible ITC ${money(totH(M.itc))}</td><td class="num">${money(sum(M.purch, r => r.taxable))}</td><td class="num">${money(sum(M.purch, r => r.igst))}</td><td class="num">${money(sum(M.purch, r => r.cgst))}</td><td class="num">${money(sum(M.purch, r => r.sgst))}</td><td colspan="2"></td></tr></tfoot>` : ''}</table></div></div>`;
-    } else if (T === 'sac') {
-      const rows = gstPackSheets(ym).find(s => s[0] === 'SAC summary')[1].slice(1);
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>SAC summary (GSTR-1 table 12)</h3><div class="sub">Outward supplies by service code. Codes come from the receipt category; change them in Masters › Categories.</div></div></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>SAC</th><th>Description</th><th class="num">Rate</th><th class="num">Taxable</th><th class="num">IGST</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">Total tax</th></tr></thead><tbody>
-        ${rows.map(r => `<tr><td class="mono">${esc(r[0])}</td><td>${esc(r[1])}</td><td class="num">${r[2]}%</td><td class="num">${money(r[3])}</td><td class="num">${gstMoney(r[4])}</td><td class="num">${gstMoney(r[5])}</td><td class="num">${gstMoney(r[6])}</td><td class="num"><b>${gstMoney(r[7])}</b></td></tr>`).join('') || '<tr><td colspan="8"><div class="empty">No sales this month.</div></td></tr>'}</tbody></table></div></div>`;
-    } else if (T === 'party') {
-      body = `<div class="grid g-2"><div class="card"><div class="card-h"><h3 class="grow">Clients</h3></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Client</th><th class="num">Taxable</th><th class="num">Output tax</th></tr></thead><tbody>${partyTotals(M.sales).map(x => `<tr><td><div class="cell-main">${esc(x.p ? x.p.name : '—')}</div><div class="cell-sub mono">${esc(x.p ? x.p.gstin || '' : '')}</div></td><td class="num">${money(x.h.taxable)}</td><td class="num">${money(totH(x.h))}</td></tr>`).join('') || '<tr><td colspan="3"><div class="empty">None</div></td></tr>'}</tbody></table></div></div>
-        <div class="card"><div class="card-h"><h3 class="grow">Vendors</h3></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vendor</th><th class="num">Taxable</th><th class="num">ITC</th><th class="num">Blocked</th></tr></thead><tbody>${vendorTotals(M.purch).map(x => `<tr><td><div class="cell-main">${esc(x.p ? x.p.name : '—')}</div><div class="cell-sub mono">${esc(x.p ? x.p.gstin || 'No GSTIN' : '')}</div></td><td class="num">${money(x.t)}</td><td class="num in">${gstMoney(x.e)}</td><td class="num">${gstMoney(x.b)}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">None</div></td></tr>'}</tbody></table></div></div></div>`;
-    } else if (T === '2b') {
-      const has = (Store.data.gst2b || []).some(x => x.ym === ym), R = has ? match2B(M) : null;
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>GSTR-2B · ${monthLabel(ym, true)}</h3><div class="sub">Download GSTR-2B as Excel from the GST portal (Returns › GSTR-2B) and upload it here. Bills match on vendor GSTIN and bill no.</div></div>${can ? `<button class="btn btn-sm" data-act="gst-2b-sample">${icon('bolt')} Try a sample 2B</button><label class="btn btn-sm btn-gold">${icon('upload')} Upload GSTR-2B<input type="file" id="g2bFile" accept=".xlsx,.xls,.csv" style="display:none"></label>` : ''}</div>
-        ${!has ? '<div class="empty"><b>Not uploaded yet</b>Upload the month\'s GSTR-2B to see which bills are on the portal.</div>' : `<div class="gst-2b-k"><div><span>Matched</span><b class="in">${R.matched.length}</b><em>${money(sum(R.matched, m => totH(m.r)))} ITC</em></div><div><span>In books, not in 2B</span><b class="${R.booksOnly.length ? 'out' : ''}">${R.booksOnly.length}</b><em>${money(sum(R.booksOnly, r => totH(r)))} ITC at risk</em></div><div><span>In 2B, not in books</span><b class="${R.portalOnly.length ? 'out' : ''}">${R.portalOnly.length}</b><em>${money(sum(R.portalOnly, x => x.igst + x.cgst + x.sgst))} ITC</em></div></div>
-        ${R.booksOnly.length ? `<div class="fsec-h" style="margin:14px 18px 6px">In books, not in GSTR-2B — ask these vendors to file</div>${R.booksOnly.map(r => `<div class="list-row"><div class="grow"><div class="t">${esc(r.party ? r.party.name : '')} · ${esc(r.no)}</div><div class="s">${fmtDate(r.date)} · ${esc(r.party ? r.party.gstin || 'No GSTIN' : '')}</div></div><span class="num">${money(totH(r))}</span></div>`).join('')}` : ''}
-        ${R.portalOnly.length ? `<div class="fsec-h" style="margin:14px 18px 6px">In GSTR-2B, not in the books</div>${R.portalOnly.map(x => `<div class="list-row"><div class="grow"><div class="t">${esc(x.name)} · ${esc(x.no)}</div><div class="s mono">${esc(x.gstin)} · ${x.date ? fmtDate(x.date) : ''} · taxable ${money(x.taxable)}</div></div><span class="num">${money(x.igst + x.cgst + x.sgst)}</span>${can ? `<button class="btn btn-sm" data-act="gst-2b-add" data-id="${x.id}">Log bill</button>` : ''}</div>`).join('')}` : ''}
-        ${R.matched.length ? `<details style="margin:10px 18px 16px"><summary class="muted" style="cursor:pointer;font-size:13px">${R.matched.length} matched bills</summary>${R.matched.map(m => `<div class="list-row" style="padding:6px 0"><div class="grow" style="font-size:13px">${esc(m.r.party.name)} · ${esc(m.r.no)}${!m.byNo ? ` <span class="muted">(2B: ${esc(m.x.no)})</span>` : ''}</div><span class="num ${Math.abs(m.diff) > 1 ? 'out' : ''}">${money(totH(m.r))}${Math.abs(m.diff) > 1 ? ' · 2B ' + money(m.x.igst + m.x.cgst + m.x.sgst) : ''}</span></div>`).join('')}</details>` : ''}`}</div>`;
-    } else {
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Checks</h3><div class="sub">Things the CA will ask about. Fix them before sending, or they're listed in the Excel as open points.</div></div></div>${ch.map(gstCheckRow).join('') || '<div class="empty"><b>No issues found</b>The records for this month look complete.</div>'}</div>`;
-    }
-    return `<div class="stack">${strip}${head}${banner}${kpis}${tabs}${body}</div>`;
-  },
-};
-function gstCheckRow(c) { return `<div class="list-row gst-ck ${c.sev}"><span class="gst-sev ${c.sev}">${c.sev === 'high' ? 'Fix' : c.sev === 'med' ? 'Check' : 'Note'}</span><div class="grow"><div class="t">${esc(c.t)}</div><div class="s">${esc(c.d)}</div></div>${c.act ? `<button class="btn btn-sm btn-ghost" data-act="${c.act[0]}" data-id="${c.act[1]}" data-v="${c.act[1]}">Open</button>` : ''}</div>`; }
-function logBillModal(pre = {}) {
-  const ym = S.gst.ym, v = { vendorId: pre.vendorId || '', billNo: pre.billNo || '', billDate: pre.billDate || ymDate(ym, 15), taxable: pre.taxable || '', gstRate: pre.gstRate ?? 18, categoryId: pre.categoryId || '' };
-  const ov = openModal(`<div class="modal-h"><h2>Log an unpaid bill</h2></div><div class="modal-b"><div class="hint" style="margin-bottom:12px">Counts the GST as input credit in the bill's month before you pay. When you later record the payment with the same vendor and bill no., it replaces this.</div><div class="fgrid c2">
-    <div class="field span3"><label>Vendor</label><div class="row" style="flex-wrap:nowrap;gap:6px"><select class="select" id="lbV">${partyOptions('vendor', v.vendorId, 'Select vendor')}</select><button type="button" class="btn" style="padding:0 10px" id="lbNew">${icon('plus')}</button></div>${pre.gstin ? `<div class="hint">2B: ${esc(pre.name || '')} · ${esc(pre.gstin)}</div>` : ''}</div>
-    <div class="field"><label>Bill no.</label><input class="input" id="lbNo" value="${esc(v.billNo)}"></div><div class="field"><label>Bill date</label><input class="input" type="date" id="lbD" value="${v.billDate}"></div>
-    <div class="field"><label>Value before GST (₹)</label><input class="input num" type="number" id="lbT" value="${v.taxable}" step="0.01"></div><div class="field"><label>GST rate</label><select class="select" id="lbR">${opts(GST_RATES.filter(r => r > 0).map(r => [r, r + '%']), v.gstRate)}</select></div>
-    <div class="field span3"><label>Category</label><select class="select" id="lbC">${catSelectOptions(api.list('categories').filter(c => c.type === 'outflow' && c.partyKind === 'vendor'), v.categoryId)}</select></div></div></div>
-    <div class="modal-f"><button class="btn" data-x="no">Cancel</button><button class="btn btn-gold" data-x="yes">Save bill</button></div>`, 'sm');
-  $('#lbNew', ov).addEventListener('click', () => partyForm('vendor', null, { quick: true, preset: pre.gstin ? { name: pre.name || '', gstin: pre.gstin } : {}, cb: p => { $('#lbV', ov).innerHTML = partyOptions('vendor', p.id, 'Select vendor'); } }));
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'no') return ov.remove();
-    const vend = api.get('parties', $('#lbV', ov).value), t = r2(+$('#lbT', ov).value || 0), rate = +$('#lbR', ov).value, d = $('#lbD', ov).value, no = $('#lbNo', ov).value.trim();
-    if (!vend || !no || !(t > 0) || !d) return toast('Vendor, bill no., date and value are required', 'error');
-    try { assertGstOpen([ymOf(d)], 'bills');
-      const gt = vend.gstin ? (vend.gstin.slice(0, 2) === HOME_STATE ? 'intra' : 'inter') : (vend.gstType !== 'none' ? vend.gstType : 'intra');
-      await api.create('gstBills', { vendorId: vend.id, billNo: no, billDate: d, taxable: t, gstRate: rate, gstType: gt, gstAmount: r2(t * rate / 100), categoryId: $('#lbC', ov).value, itc: !(api.get('categories', $('#lbC', ov).value) || {}).itcBlocked, deleted: false }, { summary: `Bill ${no} · ${vend.name} · ${money(t)} logged for GST` });
-      ov.remove(); toast('Bill logged'); render({ keepScroll: true });
-    } catch (err) { toast(err.message, 'error'); }
-  });
-}
-function gstSettingsCard() {
-  const G = gstState(), owner = api.can('settings.edit'), dis = owner ? '' : 'disabled';
-  return `<div class="card" id="gstSettings"><div class="card-h"><div class="grow"><h3>GST</h3><div class="sub">CA contact, document numbering, LUT and opening credit</div></div></div><div class="card-b"><form id="gsForm" class="fgrid">
-    <div class="field"><label>CA name</label><input class="input" name="caName" value="${esc(G.caName || '')}" ${dis}></div>
-    <div class="field span2"><label>CA email(s)</label><input class="input" name="caEmails" value="${esc((G.caEmails || []).join(', '))}" ${dis}><div class="hint">Monthly GST working is emailed here (currently your accounts address until the CA's is added)</div></div>
-    <div class="field"><label>Tax invoice prefix</label><input class="input mono" name="invPrefix" value="${esc(G.invPrefix)}" ${dis}><div class="hint">e.g. ${esc(nextInvoiceNo(TODAY))}</div></div>
-    <div class="field"><label>Credit note prefix</label><input class="input mono" name="cnPrefix" value="${esc(G.cnPrefix)}" ${dis}></div>
-    <div class="field"><label>LUT ARN (exports)</label><input class="input mono" name="lut" value="${esc(G.lut || '')}" placeholder="For zero-rated exports" ${dis}></div>
-    <div class="field span3"><label>Opening ITC balance on ${fmtDate(Store.data.settings.openingDate)} (IGST / CGST / SGST)</label><div class="row" style="gap:6px;flex-wrap:nowrap"><input class="input num" name="ocI" type="number" value="${G.openingCredit.igst || 0}" ${dis}><input class="input num" name="ocC" type="number" value="${G.openingCredit.cgst || 0}" ${dis}><input class="input num" name="ocS" type="number" value="${G.openingCredit.sgst || 0}" ${dis}></div></div>
-    </form>${owner ? '<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn btn-navy" data-act="gs-save">Save</button></div>' : ''}</div></div>`;
-}
-Object.assign(ACT, {
-  'gst-month': el => { S.gst.ym = el.dataset.v; render({ keepScroll: true }); },
-  'gst-step': el => { const n = addMonths(S.gst.ym, +el.dataset.v); if (n <= ymOf(TODAY)) { S.gst.ym = n; render({ keepScroll: true }); } },
-  'gst-tab': el => { if (S.page !== 'gst') location.hash = '#/gst'; S.gst.tab = el.dataset.v; render({ keepScroll: true }); },
-  'gst-dl': async () => { const f = await gstPackFile(S.gst.ym); downloadFile(f); toast('Downloaded ' + f.name); },
-  'gst-send': () => sendGstToCA(S.gst.ym),
-  'gst-confirm': async () => { const ym = S.gst.ym; const ov = openModal(`<div class="modal-h"><h2>CA confirmed ${monthLabel(ym, true)}</h2></div><div class="modal-b"><div class="field"><label>Note</label><input class="input" id="gcNote" placeholder="e.g. Confirmed on call, no changes"></div><div class="hint" style="margin-top:8px">The month locks: entries, tax invoices and credit notes in it can't be changed until the Owner reopens it.</div></div><div class="modal-f"><button class="btn" data-x="no">Cancel</button><button class="btn btn-gold" data-x="yes">Confirm & lock</button></div>`, 'sm');
-    ov.addEventListener('click', ev => { const b = ev.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'yes') { Store.data.gstMonths[ym] = { ...(Store.data.gstMonths[ym] || {}), status: 'confirmed', confirmedAt: nowISO(), by: api.me().id, note: $('#gcNote', ov).value.trim(), snapshot: gstSnapshot(ym) }; api.log('lock', 'gstMonths', ym, `GST ${monthLabel(ym, true)} confirmed by CA`); Store.persist(); toast('Confirmed and locked'); render({ keepScroll: true }); } ov.remove(); }); },
-  'gst-reopen': async () => { const ym = S.gst.ym; if (!await confirmBox({ title: `Reopen ${monthLabel(ym, true)}?`, body: 'Changes become possible again. Send the working to the CA again after any change.', ok: 'Reopen' })) return; Store.data.gstMonths[ym] = { ...(Store.data.gstMonths[ym] || {}), status: 'draft', reopenedAt: nowISO() }; api.log('unlock', 'gstMonths', ym, `GST ${monthLabel(ym, true)} reopened`); Store.persist(); render({ keepScroll: true }); },
-  'gst-bill': () => logBillModal(),
-  'gst-2b-sample': () => import2B(new File([sample2B(S.gst.ym)], `GSTR2B_${S.gst.ym}.csv`, { type: 'text/csv' }), S.gst.ym),
-  'gst-2b-add': el => { const x = (Store.data.gst2b || []).find(y => y.id === el.dataset.id); const v = api.list('parties').find(p => p.kind === 'vendor' && p.gstin === x.gstin); logBillModal({ vendorId: v ? v.id : '', billNo: x.no, billDate: x.date || ymDate(S.gst.ym, 15), taxable: x.taxable, gstRate: x.taxable ? Math.round((x.igst + x.cgst + x.sgst) / x.taxable * 100) : 18, gstin: x.gstin, name: x.name }); },
-  'gst-ti': el => taxInvoiceModal(el.dataset.id),
-  'gst-cn': el => creditNoteModal(el.dataset.id),
-  'gs-save': () => { const f = $('#gsForm'), G = gstState(); const em = splitEmails(f.caEmails.value), bad = em.filter(x => !validEmail(x)); if (bad.length) return toast('Not a valid email: ' + bad.join(', '), 'error'); Object.assign(G, { caName: f.caName.value.trim(), caEmails: em, invPrefix: f.invPrefix.value.trim() || 'INV/', cnPrefix: f.cnPrefix.value.trim() || 'CN/', lut: f.lut.value.trim(), openingCredit: { igst: +f.ocI.value || 0, cgst: +f.ocC.value || 0, sgst: +f.ocS.value || 0 } }); _gstCache.clear(); api.log('update', 'settings', 'gst', 'GST settings updated'); Store.persist(); toast('Saved'); render({ keepScroll: true }); },
-});
-document.addEventListener('change', async ev => {
-  if (ev.target.id === 'g2bFile' && ev.target.files[0]) { const f = ev.target.files[0]; ev.target.value = ''; import2B(f, S.gst.ym); }
-  const t = ev.target.closest && ev.target.closest('[data-gst-itc]');
-  if (t) { const [src, id] = t.dataset.gstItc.split(':'); try { assertGstOpen([S.gst.ym], 'ITC'); if (src === 'entry') await api.update('entries', id, { itc: t.checked }, { summary: `ITC ${t.checked ? 'claimed' : 'marked ineligible'} on ${describe('entries', api.get('entries', id))}` }); else await api.update('gstBills', id, { itc: t.checked }); render({ keepScroll: true }); } catch (err) { toast(err.message, 'error'); render({ keepScroll: true }); } }
-});
-/* ============================ TDS PAYABLE: deductions register, section-wise challans, 24Q/26Q return pack, Form 16A/16 issue ============================ */
-/* A deduction belongs to the month of the earlier of bill date and payment date (entry.billDate / entry.date).
-   Section: entry.tdsSection, else 192 for employees, else the vendor's remembered section, else the category default.
-   Challans are entries in "TDS Deposited" with taxPeriod (deduction month), tdsSection and challan {bsr, serial, tax, interest, fee}.
-   A challan without a section (recorded from the general tax form) is spread over the month's sections in order.
-   Months go draft → sent → confirmed (locks TDS fields on entries and challans of that month). Quarter packs feed 24Q / 26Q.
-   BACKEND: GET /api/tds/:ym; POST /api/tds/:ym/send|confirm|reopen; POST /api/tds/certs (files). */
-IC.tdsp = '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>';
-S.tdsp = { ym: null, tab: 'summary', unmatched: [] };
-const TDS_SEC = {
-  '192': { n: 'Salary', form: '24Q' },
-  '194C': { n: 'Contractors', form: '26Q', rates: [1, 2], single: 30000, agg: 100000 },
-  '194J': { n: 'Professional / technical fees', form: '26Q', rates: [10, 2], agg: 50000 },
-  '194I': { n: 'Rent', form: '26Q', rates: [10, 2], month: 50000 },
-  '194H': { n: 'Commission / brokerage', form: '26Q', rates: [2], agg: 20000 },
-  '194A': { n: 'Interest (other than bank)', form: '26Q', rates: [10], agg: 10000 },
-};
-const SEC_ORDER = Object.keys(TDS_SEC);
-const secName = s => TDS_SEC[s] ? TDS_SEC[s].n : 'Section not set';
-const panOf = p => p ? (p.pan || (p.gstin && p.gstin.length >= 12 ? p.gstin.slice(2, 12) : '')) : '';
-const PAN_RX = /[A-Z]{5}\d{4}[A-Z]/;
-const isIndividualPan = pan => /^[A-Z]{3}[PH]/.test(pan || '');
-function tdsSectionOf(e) {
-  if (!e) return null; if (e.tdsSection) return e.tdsSection;
-  const p = api.get('parties', e.partyId); if (p && p.kind === 'employee') return '192'; if (p && p.tdsSection) return p.tdsSection;
-  const c = api.get('categories', e.categoryId); return (c && c.tdsSection) || null;
-}
-const tdsDateOf = e => e.billDate && e.billDate < e.date ? e.billDate : e.date;
-const tdsDueDate = ym => ym.slice(5) === '03' ? addMonths(ym, 1) + '-30' : ymDate(addMonths(ym, 1), 7);
-const monthsOrPart = (a, b) => (+b.slice(0, 4) * 12 + +b.slice(5, 7)) - (+a.slice(0, 4) * 12 + +a.slice(5, 7)) + 1;
-const retDue = (fy, q) => [fy + '-07-31', fy + '-10-31', (fy + 1) + '-01-31', (fy + 1) + '-05-31'][q];
-const qKey = (fy, q) => fy + 'Q' + (q + 1);
-const qText = (fy, q) => `${FY_Q(q).split(' ')[0]} ${fyLabel(fy)}`;
-function tdsSettings() { featureSettings(); const s = Store.data.settings; if (!s.tds) s.tds = {}; if (s.tds.tan === undefined) s.tds.tan = ''; if (s.tds.bsr === undefined) s.tds.bsr = ''; return s.tds; }
-function ldcFor(p, sec, date) { return ((p && p.ldc) || []).find(c => c.section === sec && c.from <= date && date <= c.to); }
-/** Usual rate for a deduction, considering PAN type and a valid lower-deduction certificate within its limit. */
-function expectedTds(p, sec, date, cumBefore, base) {
-  const S = TDS_SEC[sec]; if (!S || !S.rates) return null;
-  const l = ldcFor(p, sec, date);
-  if (l) { if (!l.limit || cumBefore + base <= +l.limit + 1) return { rate: +l.rate, ok: [+l.rate], why: `lower-deduction certificate ${l.certNo}` }; return { rate: sec === '194C' ? (isIndividualPan(panOf(p)) ? 1 : 2) : S.rates[0], ok: sec === '194C' ? [isIndividualPan(panOf(p)) ? 1 : 2] : S.rates, why: `certificate ${l.certNo} limit of ${money(l.limit)} crossed` }; }
-  if (sec === '194C') { const ind = isIndividualPan(panOf(p)); return { rate: ind ? 1 : 2, ok: [ind ? 1 : 2], why: ind ? 'individual / HUF PAN' : 'company / firm PAN' }; }
-  return { rate: S.rates[0], ok: S.rates, why: S.n };
-}
-const _tdsCache = new Map();
-const tdsCacheKey = k => k + '|' + Store.data.audit.length + '|' + Store.data.parties.length;
-function tdsCached(k, fn) { const key = tdsCacheKey(k); if (_tdsCache.has(key)) return _tdsCache.get(key); if (_tdsCache.size > 300) _tdsCache.clear(); const v = fn(); _tdsCache.set(key, v); return v; }
-/** Threshold & rate analysis for a financial year (26Q sections). */
-function tdsFY(fy) {
-  return tdsCached('fy' + fy, () => {
-    const from = fy + '-04-01', to = (fy + 1) + '-03-31', out = { missed: [], wrong: [] };
-    const es = Calc.live().filter(e => e.type === 'outflow' && e.categoryId !== 'cat_tdsdep' && e.partyId && +e.taxable > 0).map(e => ({ e, d: tdsDateOf(e), sec: tdsSectionOf(e) })).filter(x => x.d >= from && x.d <= to && x.sec && x.sec !== '192' && TDS_SEC[x.sec]);
-    const groups = {}; es.forEach(x => { (groups[x.e.partyId + '|' + x.sec] = groups[x.e.partyId + '|' + x.sec] || []).push(x); });
-    for (const list of Object.values(groups)) {
-      list.sort((a, b) => a.d.localeCompare(b.d)); const sec = list[0].sec, S = TDS_SEC[sec], p = api.get('parties', list[0].e.partyId);
-      if (!p || p.kind === 'employee') continue;
-      const monthTot = {}; list.forEach(x => { const m = ymOf(x.d); monthTot[m] = (monthTot[m] || 0) + +x.e.taxable; });
-      let cum = 0, crossed = null; const pending = [];
-      for (const x of list) {
-        const base = +x.e.taxable, has = +x.e.tdsAmount > 0;
-        let req = false, why = '';
-        if (S.month) { req = monthTot[ymOf(x.d)] > S.month; why = `rent for ${monthLabel(ymOf(x.d), true)} is above ${money(S.month)} a month`; }
-        else { if (S.single && base > S.single) { req = true; why = `single bill above ${money(S.single)}`; } if (cum + base > S.agg) { if (!crossed) crossed = x.d; req = true; why = why || `payments this FY crossed ${money(S.agg)} on ${fmtDate(crossed)}`; } }
-        const exp = expectedTds(p, sec, x.d, cum, base);
-        if (req && !has) { out.missed.push({ e: x.e, d: x.d, sec, p, base, exp, why }); if (!S.month && crossed === x.d) pending.splice(0).forEach(y => out.missed.push({ ...y, why: `earlier payment; FY total crossed ${money(S.agg)} on ${fmtDate(crossed)}` })); }
-        else if (!req && !has) pending.push({ e: x.e, d: x.d, sec, p, base, exp });
-        if (has && exp && !exp.ok.includes(+x.e.tdsRate)) out.wrong.push({ e: x.e, d: x.d, sec, p, base, exp });
-        cum += base;
-      }
-    }
-    return out;
-  });
-}
-/** The month's deductions, challans and balance by section. */
-function tdsMonth(ym) { return tdsCached('m' + ym, () => computeTdsMonth(ym)); }
-function computeTdsMonth(ym) {
-  const rows = Calc.live().filter(e => e.type === 'outflow' && e.categoryId !== 'cat_tdsdep' && +e.tdsAmount > 0 && ymOf(tdsDateOf(e)) === ym).map(e => { const p = api.get('parties', e.partyId); return { e, id: e.id, date: tdsDateOf(e), paidOn: e.date, party: p, pan: panOf(p), sec: tdsSectionOf(e) || '', base: +e.taxable, rate: +e.tdsRate, tds: +e.tdsAmount, cat: nameOf('categories', e.categoryId), challan: null, payDate: null }; }).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
-  const challans = Calc.live().filter(e => e.categoryId === 'cat_tdsdep' && taxPeriodOf(e) === ym).map(e => { const c = e.challan || {}; const interest = +c.interest || 0, fee = +c.fee || 0; return { e, id: e.id, date: e.date, sec: e.tdsSection || '', tax: c.tax != null ? +c.tax : r2(+e.amount - interest - fee), interest, fee, bsr: c.bsr || '', serial: c.serial || e.refNo || '', amount: +e.amount }; }).sort((a, b) => a.date.localeCompare(b.date));
-  const due = tdsDueDate(ym);
-  const secs = [...new Set([...rows.map(r => r.sec), ...challans.filter(c => c.sec).map(c => c.sec)])].sort((a, b) => (SEC_ORDER.indexOf(a) + 99 * !TDS_SEC[a]) - (SEC_ORDER.indexOf(b) + 99 * !TDS_SEC[b]));
-  const pay = {}; secs.forEach(s => { pay[s] = challans.filter(c => c.sec === s).map(c => ({ c, amt: c.tax })); });
-  // challans without a section: spread over sections still owing, in section order
-  challans.filter(c => !c.sec || !secs.includes(c.sec)).forEach(c => { let left = c.tax; for (const s of secs) { if (left <= 0) break; const owe = r2(sum(rows.filter(r => r.sec === s), r => r.tds) - sum(pay[s], x => x.amt)); if (owe > 0) { const x = Math.min(owe, left); pay[s].push({ c, amt: x }); left = r2(left - x); } } });
-  const bySec = secs.map(s => {
-    const rs = rows.filter(r => r.sec === s), ps = pay[s].slice().sort((a, b) => a.c.date.localeCompare(b.c.date));
-    const tds = r2(sum(rs, r => r.tds)), paid = r2(sum(ps, x => x.amt));
-    // FIFO: which challan covered each deduction → payment date for interest
-    let i = 0, avail = ps[0] ? ps[0].amt : 0;
-    for (const r of rs) { let need = r.tds; while (need > 0.5 && i < ps.length) { const x = Math.min(need, avail); need -= x; avail -= x; if (need <= 0.5) { r.challan = ps[i].c; r.payDate = ps[i].c.date; } if (avail <= 0.5) { i++; avail = ps[i] ? ps[i].amt : 0; } } }
-    let interest = 0, accruing = false;
-    rs.forEach(r => { const pd = r.payDate || TODAY; if (pd > due) { interest += r.tds * 0.015 * monthsOrPart(r.date, pd); if (!r.payDate) accruing = true; } });
-    const chs = [...new Set(ps.map(x => x.c))];
-    return { sec: s, n: secName(s), form: TDS_SEC[s] ? TDS_SEC[s].form : '', deductees: new Set(rs.map(r => r.party ? r.party.id : r.id)).size, base: r2(sum(rs, r => r.base)), tds, paid, balance: r2(Math.max(0, tds - paid)), excess: r2(Math.max(0, paid - tds)), interest: Math.round(interest), interestPaid: r2(sum(chs.filter(c => c.sec === s), c => c.interest)), accruing, challans: chs, rows: rs };
-  });
-  const st = (Store.data.tdsMonths || {})[ym] || { status: 'draft' };
-  const tot = k => r2(sum(bySec, x => x[k]));
-  return { ym, rows, challans, due, bySec, tds: tot('tds'), paid: r2(sum(challans, c => c.tax)), balance: tot('balance'), interest: tot('interest'), interestPaid: r2(sum(challans, c => c.interest)), status: st, overdue: tot('balance') > 0.5 && TODAY > due };
-}
-function tdsChecks(M) {
-  const out = [], fy = fyOf(M.ym + '-01'), F = tdsFY(fy);
-  F.missed.filter(x => ymOf(x.d) === M.ym).forEach(x => { const r = x.exp ? x.exp.rate : 10, due = r2(x.base * r / 100), mo = Math.max(1, monthsOrPart(x.d, TODAY)); out.push({ sev: 'high', t: `No TDS on ${money(x.base)} to ${x.p.name} (${x.sec})`, d: `${fmtDate(x.d)} · ${x.why}. TDS due ${money(due)} at ${r}%, plus about ${money(Math.round(due * 0.01 * mo))} interest (1% a month) if deducted now. Recover it from the next payment.`, act: ['open-entry', x.e.id] }); });
-  F.wrong.filter(x => ymOf(x.d) === M.ym).forEach(x => out.push({ sev: 'med', t: `${x.p.name}: TDS at ${x.e.tdsRate}% under ${x.sec}, expected ${x.exp.rate}%`, d: `${fmtDate(x.d)} · ${money(x.base)} · ${x.exp.why}. Short / excess ${money(Math.abs(r2(x.base * x.exp.rate / 100 - x.e.tdsAmount)))}.`, act: ['open-entry', x.e.id] }));
-  M.rows.filter(r => !r.sec).forEach(r => out.push({ sev: 'med', t: `Section not set · ${r.party ? r.party.name : ''}`, d: `${fmtDate(r.date)} · TDS ${money(r.tds)}. Pick the section in Deductions so it reaches the right challan.`, act: ['tdsp-tab', 'deductions'] }));
-  M.bySec.filter(s => s.balance > 0.5).forEach(s => { if (TODAY > M.due) out.push({ sev: 'high', t: `${s.sec} · ${money(s.balance)} not deposited (due ${fmtDate(M.due)})`, d: `Interest is running at 1.5% a month: about ${money(s.interest - s.interestPaid)} so far. Record the challan once paid.`, act: ['tdsp-challan', s.sec] }); });
-  M.bySec.filter(s => s.balance <= 0.5 && s.interest - s.interestPaid > 1).forEach(s => out.push({ sev: 'med', t: `${s.sec} deposited late · interest ${money(s.interest - s.interestPaid)} unpaid`, d: `Deposit was due ${fmtDate(M.due)}. Interest at 1.5% a month from the deduction date; pay it with the next challan.`, act: ['tdsp-challan', s.sec] }));
-  M.bySec.filter(s => s.excess > 1).forEach(s => out.push({ sev: 'low', t: `${s.sec} · challans exceed TDS by ${money(s.excess)}`, d: 'Check the challan amount, or adjust it in the return.', act: ['tdsp-tab', 'challans'] }));
-  M.rows.forEach(r => { const l = r.party && (r.party.ldc || []).find(c => c.section === r.sec && c.to < r.date && c.to >= addDays(r.date, -120)); if (l && +r.rate === +l.rate) out.push({ sev: 'med', t: `${r.party.name}: certificate ${l.certNo} expired ${fmtDate(l.to)}`, d: `TDS at the lower ${l.rate}% on ${fmtDate(r.date)}. The normal rate applies unless a new certificate is issued.`, act: ['open-entry', r.id] }); });
-  return out;
-}
-/* ---------- quarter / returns ---------- */
-function tdsQuarter(fy, q) {
-  return tdsCached('q' + fy + q, () => {
-    const ms = quarterMonths(fy, q).filter(m => m <= ymOf(TODAY)), Ms = ms.map(tdsMonth);
-    const rows = Ms.flatMap(M => M.rows), chs = Ms.flatMap(M => M.challans);
-    const forms = ['26Q', '24Q'].map(form => {
-      const rs = rows.filter(r => (r.sec === '192') === (form === '24Q')), key = `tdsret${form}:${qKey(fy, q)}`, filed = (Store.data.compliance || {})[key];
-      const due = retDue(fy, q), until = filed && filed.done ? filed.at.slice(0, 10) : TODAY, tds = r2(sum(rs, r => r.tds));
-      const fee = until > due ? Math.min(200 * diffDays(until, due), tds) : 0;
-      return { form, rows: rs, tds, base: r2(sum(rs, r => r.base)), key, filed: filed && filed.done ? filed : null, due, fee, deductees: new Set(rs.map(r => r.party ? r.party.id : '')).size };
-    });
-    return { fy, q, months: ms, Ms, rows, challans: chs, forms, status: (Store.data.tdsQuarters || {})[qKey(fy, q)] || { status: 'draft' } };
-  });
-}
-function deducteeTotals(rows) { const m = new Map(); rows.forEach(r => { const k = (r.party ? r.party.id : r.id) + '|' + r.sec; const x = m.get(k) || { p: r.party, sec: r.sec, base: 0, tds: 0, n: 0 }; x.base = r2(x.base + r.base); x.tds = r2(x.tds + r.tds); x.n++; m.set(k, x); }); return [...m.values()].sort((a, b) => b.tds - a.tds); }
-/* ---------- locks ---------- */
-function tdsLocked(ym) { const s = (Store.data.tdsMonths || {})[ym]; return s && s.status === 'confirmed'; }
-function assertTdsOpen(yms, what) { const y = [...new Set(yms.filter(Boolean))].find(tdsLocked); if (y) throw new Error(`TDS for ${monthLabel(y, true)} is confirmed by the CA. Reopen it in TDS payable before changing ${what}.`); }
-(() => {
-  const tm = e => !e ? [] : e.categoryId === 'cat_tdsdep' ? [taxPeriodOf(e)] : e.type === 'outflow' && (+e.tdsAmount > 0 || e.tdsSection) ? [ymOf(tdsDateOf(e))] : [];
-  const save = api.saveEntry.bind(api), del = api.softDelete.bind(api);
-  api.saveEntry = async (input, id) => {
-    const old = id ? api.get('entries', id) : null;
-    if (input.categoryId === 'cat_tdsdep' && input.challan) { const c = input.challan; input.challan = { ...c, tax: r2(+input.taxable - (+c.interest || 0) - (+c.fee || 0)) }; }
-    const n = api.normaliseEntry(input);
-    const touches = old ? ['tdsAmount', 'tdsRate', 'tdsSection', 'billDate', 'date', 'partyId', 'taxable', 'amount', 'taxPeriod'].some(k => String(old[k] ?? '') !== String(n[k] ?? '')) : true;
-    if (touches) assertTdsOpen([...tm(old), ...tm(n)], 'this entry');
-    return save(input, id);
-  };
-  api.softDelete = async id => { assertTdsOpen(tm(api.get('entries', id)), 'this entry'); return del(id); };
-})();
-/* ---------- entry form helpers ---------- */
-function tdsSectionField(F, f, sel) {
-  const v = F.v, cur = v.tdsSection || tdsSectionOf(v) || '', p = api.get('parties', v.partyId);
-  const exp = cur && TDS_SEC[cur] ? expectedTds(p, cur, tdsDateOf({ date: v.date || TODAY, billDate: v.billDate }), 0, 0) : null;
-  const hint = !cur ? '<span class="out">Pick a section</span>' : exp ? (exp.ok.includes(+v.tdsRate) ? `Usual ${exp.ok.join('% or ')}%${exp.why.startsWith('lower') ? ' · ' + exp.why : ''}` : `<span class="out">Usual rate is ${exp.rate}% (${esc(exp.why)})</span>`) : '';
-  return f('tdsSection', 'TDS section', sel('tdsSection', opts(SEC_ORDER.filter(s => s !== '192').map(s => [s, s + ' · ' + TDS_SEC[s].n]), cur, cur ? null : 'Select')), '', hint);
-}
-function applyTdsSection(F, sec) {
-  const v = F.v; v.tdsSection = sec;
-  if (!F.rateTouched && TDS_SEC[sec] && TDS_SEC[sec].rates) { const e = expectedTds(api.get('parties', v.partyId), sec, tdsDateOf({ date: v.date || TODAY, billDate: v.billDate }), 0, 0); if (e) { v.tdsRate = e.rate; F.tdsAuto = true; } }
-}
-/* ---------- challans ---------- */
-function itParty() { return api.get('parties', 'ot_it') || api.list('parties').find(p => p.kind === 'other' && /income tax/i.test(p.name)); }
-function challanModal(ym, sec) {
-  if (!api.can('tdsp.edit')) return toast('Not allowed for your role', 'error');
-  try { assertTdsOpen([ym], 'challans'); } catch (err) { return toast(err.message, 'error'); }
-  const M = tdsMonth(ym), secs = M.bySec.length ? M.bySec : [{ sec: '194J', balance: 0, interest: 0, interestPaid: 0 }];
-  sec = sec && secs.some(s => s.sec === sec) ? sec : (secs.find(s => s.balance > 0.5) || secs[0]).sec;
-  const T = tdsSettings(), lastBsr = (M.challans.concat(Calc.live().filter(e => e.categoryId === 'cat_tdsdep' && e.challan).slice(-1).map(e => ({ bsr: e.challan.bsr })))).map(c => c.bsr).filter(Boolean).pop() || T.bsr || '';
-  const banks = api.list('accounts').filter(a => a.active), acc = (lastEntry(e => e.categoryId === 'cat_tdsdep') || {}).accountId || (banks[0] || {}).id;
-  const fill = s => { const x = secs.find(y => y.sec === s) || {}; return { tax: x.balance || 0, int: Math.max(0, Math.round((x.interest || 0) - (x.interestPaid || 0))) }; };
-  const f0 = fill(sec);
-  const ov = openModal(`<div class="modal-h"><h2>Record TDS challan</h2><span class="muted" style="font-size:12.5px">${monthLabel(ym, true)} · due ${fmtDate(M.due)}</span></div><div class="modal-b"><div class="fgrid c2">
-    <div class="field"><label>Section</label><select class="select" id="chSec">${opts(secs.map(s => [s.sec, `${s.sec} · ${secName(s.sec)}${s.balance > 0.5 ? ' · ' + money(s.balance) + ' due' : ''}`]), sec)}</select></div>
-    <div class="field"><label>Paid on</label><input class="input" type="date" id="chDate" value="${TODAY}"></div>
-    <div class="field"><label>Tax (₹)</label><input class="input num" type="number" step="1" id="chTax" value="${Math.round(f0.tax)}"></div>
-    <div class="field"><label>Interest (₹)</label><input class="input num" type="number" step="1" id="chInt" value="${f0.int}"><div class="hint" id="chIntH">${f0.int ? '1.5% a month for late deposit' : 'Nil if paid by the due date'}</div></div>
-    <div class="field"><label>Late fee 234E (₹)</label><input class="input num" type="number" step="1" id="chFee" value="0"></div>
-    <div class="field"><label>BSR code</label><input class="input mono" id="chBsr" maxlength="7" value="${esc(lastBsr)}" placeholder="7 digits"></div>
-    <div class="field"><label>Challan serial no.</label><input class="input mono" id="chSer" maxlength="5" placeholder="5 digits"></div>
-    <div class="field"><label>Paid from</label><select class="select" id="chAcc">${opts(banks.map(a => [a.id, a.name]), acc)}</select></div></div>
-    <div class="hint" style="margin-top:10px">BSR code and challan serial no. are on the challan receipt (ITNS 281). They go into the TDS return.</div></div>
-    <div class="modal-f"><button class="btn" data-x="no">Cancel</button><button class="btn btn-gold" data-x="yes">Save challan</button></div>`, 'sm');
-  $('#chSec', ov).addEventListener('change', ev => { const x = fill(ev.target.value); $('#chTax', ov).value = Math.round(x.tax); $('#chInt', ov).value = x.int; });
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'no') return ov.remove();
-    const s = $('#chSec', ov).value, tax = Math.round(+$('#chTax', ov).value || 0), int = Math.round(+$('#chInt', ov).value || 0), fee = Math.round(+$('#chFee', ov).value || 0), bsr = $('#chBsr', ov).value.trim(), ser = $('#chSer', ov).value.trim(), date = $('#chDate', ov).value;
-    if (!(tax + int + fee > 0)) return toast('Enter the amount paid', 'error');
-    if (bsr && !/^\d{7}$/.test(bsr)) return toast('BSR code is 7 digits', 'error');
-    if (ser && !/^\d{1,5}$/.test(ser)) return toast('Challan serial no. is up to 5 digits', 'error');
-    let it = itParty(); if (!it) it = await api.create('parties', { kind: 'other', name: 'Income Tax Department', gstin: '', gstType: 'none', active: true });
-    try {
-      const e = await api.saveEntry({ type: 'outflow', date, categoryId: 'cat_tdsdep', departmentId: (api.get('departments', 'dep_fin') || api.list('departments')[0] || {}).id, partyId: it.id, projectId: '', piId: '', description: `TDS ${s} for ${monthLabel(ym, true)}`, refNo: ser, taxable: tax + int + fee, gstType: 'none', gstRate: 0, gstAmount: 0, itc: false, tdsRate: 0, tdsAmount: 0, paymentMode: 'NEFT', accountId: $('#chAcc', ov).value, toAccountId: '', txnRef: bsr && ser ? bsr + '/' + ser : '', notes: '', attachments: [], taxPeriod: ym, tdsSection: s, challan: { bsr, serial: ser, tax, interest: int, fee } });
-      if (bsr) tdsSettings().bsr = bsr;
-      Store.persist(); ov.remove(); toast(`Challan ${s} · ${money(e.amount)} recorded`); render({ keepScroll: true });
-    } catch (err) { toast(err.message, 'error'); }
-  });
-}
-/* ---------- lower deduction certificates ---------- */
-function ldcModal(partyId) {
-  const p = api.get('parties', partyId); if (!p) return;
-  const list = () => (p.ldc || []).map(c => `<div class="list-row" style="padding:7px 0"><div class="grow"><div class="t mono" style="font-size:13px">${esc(c.certNo)} · ${esc(c.section)} @ ${c.rate}%</div><div class="s">${fmtDate(c.from)} – ${fmtDate(c.to)}${c.limit ? ' · up to ' + money(c.limit) : ''}${c.to < TODAY ? ' · <span class="out">expired</span>' : ''}</div></div><button class="icon-btn" data-l="del" data-id="${c.id}" title="Remove">${icon('trash')}</button></div>`).join('') || '<div class="muted" style="font-size:13px">None recorded.</div>';
-  const fy = fyOf(TODAY);
-  const ov = openModal(`<div class="modal-h"><h2>Lower deduction certificates</h2><span class="muted" style="font-size:12.5px">${esc(p.name)} · ${esc(panOf(p) || 'no PAN')}</span></div><div class="modal-b"><div id="ldcList">${list()}</div>
-    <div class="fsec-h" style="margin-top:16px">Add certificate (Sec. 197)</div><div class="fgrid c2">
-    <div class="field"><label>Certificate no.</label><input class="input mono" id="lcNo"></div><div class="field"><label>Section</label><select class="select" id="lcSec">${opts(SEC_ORDER.filter(s => s !== '192').map(s => [s, s + ' · ' + TDS_SEC[s].n]), tdsSectionOf({ partyId: p.id }) || '194J')}</select></div>
-    <div class="field"><label>Rate %</label><input class="input num" type="number" step="0.01" id="lcRate" value="1"></div><div class="field"><label>Amount limit (₹)</label><input class="input num" type="number" id="lcLim" placeholder="As on certificate"></div>
-    <div class="field"><label>Valid from</label><input class="input" type="date" id="lcFrom" value="${fy}-04-01"></div><div class="field"><label>Valid to</label><input class="input" type="date" id="lcTo" value="${fy + 1}-03-31"></div></div></div>
-    <div class="modal-f"><button class="btn" data-l="close">Close</button><button class="btn btn-gold" data-l="add">Add certificate</button></div>`, 'sm');
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-l]'); if (!b) return; const a = b.dataset.l;
-    if (a === 'close') { ov.remove(); return render({ keepScroll: true }); }
-    const ldc = (p.ldc || []).slice();
-    if (a === 'del') { await api.update('parties', p.id, { ldc: ldc.filter(c => c.id !== b.dataset.id) }, { summary: `Lower deduction certificate removed · ${p.name}` }); }
-    if (a === 'add') {
-      const c = { id: uid('ldc'), certNo: $('#lcNo', ov).value.trim().toUpperCase(), section: $('#lcSec', ov).value, rate: +$('#lcRate', ov).value, limit: +$('#lcLim', ov).value || 0, from: $('#lcFrom', ov).value, to: $('#lcTo', ov).value };
-      if (!c.certNo || !(c.rate >= 0) || !c.from || !c.to || c.to < c.from) return toast('Certificate no., rate and a valid period are required', 'error');
-      await api.update('parties', p.id, { ldc: [...ldc, c] }, { summary: `Lower deduction certificate ${c.certNo} · ${c.section} @ ${c.rate}% · ${p.name}` });
-    }
-    $('#ldcList', ov).innerHTML = list();
-  });
-}
-/* ---------- Excel ---------- */
-async function sheetsToFile(sheets, name) {
-  try {
-    await loadXLSX(); const wb = XLSX.utils.book_new();
-    sheets.forEach(([n, aoa]) => { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = (aoa.find(r => r.length > 3) || aoa[0] || []).map((_, i) => ({ wch: i < 4 ? 24 : 14 })); XLSX.utils.book_append_sheet(wb, ws, n.slice(0, 31)); });
-    return new File([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], name + '.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  } catch (e) {
-    const cell = v => typeof v === 'number' ? `<Cell><Data ss:Type="Number">${v}</Data></Cell>` : `<Cell><Data ss:Type="String">${xmlEsc(v)}</Data></Cell>`;
-    return new File([`<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${sheets.map(([n, aoa]) => `<Worksheet ss:Name="${xmlEsc(n.slice(0, 31))}"><Table>${aoa.map(r => `<Row>${r.map(cell).join('')}</Row>`).join('')}</Table></Worksheet>`).join('')}</Workbook>`], name + '.xml', { type: 'application/vnd.ms-excel' });
-  }
-}
-const coHead = () => `${Store.data.settings.company} · TAN ${tdsSettings().tan || '—'} · PAN ${(Store.data.settings.gstin || '').slice(2, 12) || '—'}`;
-const chLabel = c => c ? [c.serial, c.bsr, fmtDate(c.date)].filter(Boolean).join(' · ') : 'Not deposited';
-function tdsMonthSheets(ym) {
-  const M = tdsMonth(ym);
-  const sum1 = [[coHead()], [`TDS working for ${monthLabel(ym, true)} · deposit due ${fmtDate(M.due)} · prepared ${fmtDate(TODAY)} · status ${GST_STATUS[M.status.status || 'draft'][0]}`], [],
-    ['Section', 'Nature', 'Return', 'Deductees', 'Amount paid / credited', 'TDS deducted', 'Deposited', 'Balance', 'Interest (est.)', 'Interest paid'],
-    ...M.bySec.map(s => [s.sec || '—', s.n, s.form, s.deductees, s.base, s.tds, s.paid, s.balance, s.interest, s.interestPaid]),
-    ['Total', '', '', '', r2(sum(M.bySec, s => s.base)), M.tds, M.paid, M.balance, M.interest, M.interestPaid]];
-  const ded = [['TDS date', 'Paid on', 'Deductee', 'PAN', 'Section', 'Category', 'Bill / ref', 'Amount paid / credited', 'Rate %', 'TDS', 'Challan (serial · BSR · date)'], ...M.rows.map(r => [fmtDate(r.date), fmtDate(r.paidOn), r.party ? r.party.name : '', r.pan, r.sec, r.cat, r.e.refNo || '', r.base, r.rate, r.tds, chLabel(r.challan)])];
-  const chs = [['Date', 'Section', 'BSR code', 'Challan serial', 'Tax', 'Interest', 'Late fee', 'Total', 'On time'], ...M.challans.map(c => [fmtDate(c.date), c.sec || 'Not split', c.bsr, c.serial, c.tax, c.interest, c.fee, c.amount, c.date <= M.due ? 'Yes' : 'Late'])];
-  const dw = [['Deductee', 'PAN', 'Section', 'Entries', 'Amount paid / credited', 'TDS'], ...deducteeTotals(M.rows).map(x => [x.p ? x.p.name : '', panOf(x.p), x.sec, x.n, x.base, x.tds])];
-  const sheets = [['Summary', sum1], ['Deductions', ded], ['Challans', chs], ['Deductee-wise', dw]];
-  const ch = tdsChecks(M); if (ch.length) sheets.push(['Open points', [['Priority', 'Point', 'Detail'], ...ch.map(c => [c.sev, c.t, c.d])]]);
-  return sheets;
-}
-function tdsQuarterSheets(fy, q) {
-  const Q = tdsQuarter(fy, q), [f26, f24] = Q.forms;
-  const sum1 = [[coHead()], [`TDS returns for ${qText(fy, q)} · due ${fmtDate(retDue(fy, q))}`], [], ['Return', 'Section', 'Deductees', 'Amount paid / credited', 'TDS deducted', 'Deposited (challans)', 'Late fee 234E (est.)'],
-    ...Q.forms.flatMap(F => [...new Set(F.rows.map(r => r.sec))].map(s => { const rs = F.rows.filter(r => r.sec === s); return [F.form, s, new Set(rs.map(r => r.party && r.party.id)).size, r2(sum(rs, r => r.base)), r2(sum(rs, r => r.tds)), r2(sum(Q.challans.filter(c => c.sec === s), c => c.tax)), ''] }).concat([[F.form + ' total', '', F.deductees, F.base, F.tds, '', F.fee]]))];
-  const ann = F => [['Deductee', 'PAN', 'Section', 'Date of payment / credit', 'Amount paid / credited', 'Rate %', 'TDS deducted', 'Date of deduction', 'Challan serial', 'BSR code', 'Challan date'], ...F.rows.map(r => [r.party ? r.party.name : '', r.pan, r.sec, fmtDate(r.paidOn < r.date ? r.paidOn : r.date), r.base, r.rate, r.tds, fmtDate(r.date), r.challan ? r.challan.serial : '', r.challan ? r.challan.bsr : '', r.challan ? fmtDate(r.challan.date) : 'Not deposited'])];
-  const emp = [['Employee', 'PAN', ...Q.months.map(m => monthLabel(m)), 'Salary paid (quarter)', 'TDS (quarter)'], ...[...new Set(f24.rows.map(r => r.party && r.party.id))].map(id => { const rs = f24.rows.filter(r => r.party && r.party.id === id), p = api.get('parties', id); return [p ? p.name : '', panOf(p), ...Q.months.map(m => r2(sum(rs.filter(r => ymOf(r.date) === m), r => r.tds))), r2(sum(rs, r => r.base)), r2(sum(rs, r => r.tds))]; })];
-  const chs = [['Month', 'Date', 'Section', 'BSR code', 'Challan serial', 'Tax', 'Interest', 'Late fee', 'Total'], ...Q.Ms.flatMap(M => M.challans.map(c => [monthLabel(M.ym, true), fmtDate(c.date), c.sec || 'Not split', c.bsr, c.serial, c.tax, c.interest, c.fee, c.amount]))];
-  return [['Summary', sum1], ['26Q deductees', ann(f26)], ['24Q deductees', ann(f24)], ['24Q employee-wise', emp], ['Challans', chs]];
-}
-function tdsEmailVars(rowsBySec, extra) {
-  const pad = (s, n, r) => { s = String(s); return r ? s.padStart(n) : s.padEnd(n); };
-  const t = [`${pad('Section', 30)}${pad('TDS', 14, 1)}${pad('Deposited', 14, 1)}${pad('Balance', 14, 1)}`, ...rowsBySec.map(s => `${pad(s.sec + ' ' + s.n, 30).slice(0, 30)}${pad(money(s.tds), 14, 1)}${pad(money(s.paid), 14, 1)}${pad(money(s.balance), 14, 1)}`)].join('\n');
-  return { company: Store.data.settings.company, tds_summary: t + (extra ? '\n\n' + extra : ''), tds_checks: '' };
-}
-async function sendPackToCA({ kind, file, vars, title, sub, onQueued, entity, entityId, sheets }) {
-  if (!api.can('tdsp.send')) return toast('Not allowed for your role', 'error');
-  const G = gstState(); if (!G.caEmails || !G.caEmails.length) return toast('Add the CA\'s email in Settings › GST first', 'error');
-  const meta = { id: uid('f'), name: file.name, type: file.type, size: file.size }; await FileStore.put({ ...meta, blob: file });
-  const E = { kind, partyId: null, on: true, to: G.caEmails.slice(), newTo: '', saveNew: false, cc: (emailSettings().cc || []).join(', '), subject: '', body: '', edited: false, attachDocs: true, files: [], err: '' };
-  refreshEmail(E, vars);
-  const ov = openModal(`<div class="modal-h"><h2>${esc(title)}</h2><span class="muted" style="font-size:12.5px">${esc(sub)}</span><span class="spacer"></span><button class="icon-btn" data-c="close">${icon('x')}</button></div><div class="modal-b" id="tEm"></div>
-    <div class="modal-f"><button class="btn" data-c="dl">${icon('file')} Download Excel</button><span class="spacer"></span><button class="btn" data-c="close">Cancel</button><button class="btn btn-gold" data-c="send">${icon('send')} Queue email</button></div>`, 'xl');
-  const body = $('#tEm', ov); const draw = () => { body.innerHTML = `<div class="muted" style="font-size:13px;margin-bottom:10px">Attached: <b>${esc(file.name)}</b> (${Math.round(file.size / 1024)} KB · ${sheets} sheets)</div>` + emailBoxHTML(E, { docs: 1, standalone: true }); };
-  draw(); bindEmailEvents(body, () => E, draw);
-  ov.addEventListener('click', async ev => {
-    const b = ev.target.closest('[data-c]'); if (!b) return;
-    if (b.dataset.c === 'close') return ov.remove();
-    if (b.dataset.c === 'dl') return downloadFile(file);
-    try { checkEmail(E); const m = await api.queueEmail({ kind, entity, entityId, partyId: null, to: E.to, cc: splitEmails(E.cc), subject: E.subject, body: E.body, attachments: [meta] }); onQueued(m, E); Store.persist(); ov.remove(); toast('Queued to ' + E.to.join(', ')); render({ keepScroll: true }); } catch (err) { toast(err.message, 'error'); }
-  });
-}
-const tdsSnap = ym => { const M = tdsMonth(ym); return { tds: M.tds, paid: M.paid, at: nowISO() }; };
-async function sendTdsMonth(ym) {
-  const sheets = tdsMonthSheets(ym), file = await sheetsToFile(sheets, `TDS-working-${ym}-IUOVA`), M = tdsMonth(ym), ch = tdsChecks(M).filter(c => c.sev !== 'low');
-  const vars = { ...tdsEmailVars(M.bySec, `Total TDS ${money(M.tds)} · deposited ${money(M.paid)} · due ${fmtDate(M.due)}${M.interest ? ' · interest (est.) ' + money(M.interest) : ''}`), month: monthLabel(ym, true) };
-  vars.tds_checks = ch.length ? 'Points to note:\n' + ch.map(c => '• ' + c.t).join('\n') + '\n\n' : '';
-  sendPackToCA({ kind: 'tds_pack', file, vars, title: 'Send TDS working to CA', sub: monthLabel(ym, true), entity: 'tdsMonths', entityId: ym, sheets: sheets.length, onQueued: (m, E) => { Store.data.tdsMonths[ym] = { ...(Store.data.tdsMonths[ym] || {}), status: 'sent', sentAt: nowISO(), emailId: m.id, by: api.me().id, snapshot: tdsSnap(ym) }; api.log('update', 'tdsMonths', ym, `TDS working for ${monthLabel(ym, true)} sent to CA (${E.to.join(', ')})`); } });
-}
-async function sendTdsQuarter(fy, q) {
-  const sheets = tdsQuarterSheets(fy, q), file = await sheetsToFile(sheets, `TDS-returns-${qKey(fy, q)}-IUOVA`), Q = tdsQuarter(fy, q);
-  const bySec = SEC_ORDER.map(s => ({ sec: s, n: TDS_SEC[s].n, tds: r2(sum(Q.rows.filter(r => r.sec === s), r => r.tds)), paid: r2(sum(Q.challans.filter(c => c.sec === s), c => c.tax)) })).filter(x => x.tds || x.paid).map(x => ({ ...x, balance: r2(Math.max(0, x.tds - x.paid)) }));
-  const issues = Q.Ms.flatMap(M => tdsChecks(M).filter(c => c.sev === 'high').map(c => monthLabel(M.ym) + ': ' + c.t));
-  const vars = { ...tdsEmailVars(bySec, `26Q: ${Q.forms[0].deductees} deductees · TDS ${money(Q.forms[0].tds)}\n24Q: ${Q.forms[1].deductees} employees · TDS ${money(Q.forms[1].tds)}`), quarter: qText(fy, q), tds_checks: issues.length ? 'Points to note:\n' + issues.map(x => '• ' + x).join('\n') + '\n\n' : '' };
-  sendPackToCA({ kind: 'tds_return', file, vars, title: 'Send TDS return pack to CA', sub: qText(fy, q), entity: 'tdsQuarters', entityId: qKey(fy, q), sheets: sheets.length, onQueued: (m, E) => { Store.data.tdsQuarters[qKey(fy, q)] = { status: 'sent', sentAt: nowISO(), emailId: m.id }; api.log('update', 'tdsQuarters', qKey(fy, q), `TDS return pack ${qText(fy, q)} sent to CA (${E.to.join(', ')})`); } });
-}
-/* ---------- certificates (Form 16A / 16) ---------- */
-function certCandidates(fy, q) {
-  const Q = tdsQuarter(fy, q), a = deducteeTotals(Q.forms[0].rows).reduce((m, x) => { const id = x.p && x.p.id; if (!id) return m; const y = m.get(id) || { p: x.p, form: '16A', tds: 0 }; y.tds = r2(y.tds + x.tds); m.set(id, y); return m; }, new Map());
-  const out = [...a.values()];
-  if (q === 3) { const rows = fyMonths(fy).filter(m => m <= ymOf(TODAY)).flatMap(m => tdsMonth(m).rows.filter(r => r.sec === '192')); const e = new Map(); rows.forEach(r => { const id = r.party && r.party.id; if (!id) return; const y = e.get(id) || { p: r.party, form: '16', tds: 0 }; y.tds = r2(y.tds + r.tds); e.set(id, y); }); out.push(...e.values()); }
-  return out;
-}
-const certOf = (fy, q, form, pid) => (Store.data.tdsOutCerts || []).find(c => c.fy === fy && c.q === q && c.form === form && c.partyId === pid);
-function matchCertFile(name, cands) {
-  const up = name.toUpperCase(), pan = (up.match(PAN_RX) || [])[0];
-  const form = /16A/.test(up) ? '16A' : /PART|FORM ?16[^A]|_16_|FORM16(?!A)/.test(up) ? '16' : null;
-  let hit = pan ? cands.filter(c => panOf(c.p) === pan) : [];
-  if (!hit.length) { const tk = new Set(nameToks(name.replace(/\.pdf$/i, ''))); const sc = cands.map(c => ({ c, n: nameToks(c.p.name.replace(/\(.*\)/, '')).filter(t => tk.has(t)).length })).filter(x => x.n > 0); const best = Math.max(0, ...sc.map(x => x.n)); hit = sc.filter(x => x.n === best).map(x => x.c); }
-  if (hit.length > 1 && form) hit = hit.filter(c => c.form === form);
-  return hit.length === 1 ? hit[0] : null;
-}
-async function addCertFiles(files, fy, q) {
-  const cands = certCandidates(fy, q); let ok = 0; S.tdsp.unmatched = S.tdsp.unmatched.filter(u => u.fy === fy && u.q === q);
-  for (const f of files) {
-    if (!/pdf$/i.test(f.type) && !/\.pdf$/i.test(f.name)) { toast(f.name + ' is not a PDF', 'error'); continue; }
-    const meta = { id: uid('f'), name: f.name, type: 'application/pdf', size: f.size }; await FileStore.put({ ...meta, blob: f });
-    const c = matchCertFile(f.name, cands);
-    if (c) { saveCert(fy, q, c.form, c.p.id, meta); ok++; } else S.tdsp.unmatched.push({ fy, q, meta });
-  }
-  Store.persist(); render({ keepScroll: true });
-  toast(`${ok} certificate${ok === 1 ? '' : 's'} matched${S.tdsp.unmatched.length ? ` · ${S.tdsp.unmatched.length} to assign` : ''}`);
-}
-function saveCert(fy, q, form, pid, meta) {
-  const list = Store.data.tdsOutCerts, old = certOf(fy, q, form, pid);
-  if (old) Object.assign(old, { file: meta, uploadedAt: nowISO(), sentAt: null, emailId: null }); else list.push({ id: uid('tc'), fy, q, form, partyId: pid, file: meta, uploadedAt: nowISO(), sentAt: null, emailId: null });
-  api.log('create', 'tdsOutCerts', pid, `Form ${form} ${qText(fy, q)} attached for ${nameOf('parties', pid)}`);
-}
-function sampleCertFiles(fy, q) {
-  const pdf = t => `%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj 4 0 obj<</Length ${t.length + 40}>>stream\nBT /F1 14 Tf 60 780 Td (${t}) Tj ET\nendstream endobj 5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF`;
-  return certCandidates(fy, q).map((c, i) => { const pan = panOf(c.p) || 'NOPAN0000X'; const nm = i === 1 ? c.p.name.replace(/[^A-Za-z ]/g, '').trim().replace(/\s+/g, '_') + `_Q${q + 1}.pdf` : c.form === '16' ? `${pan}_PARTA_${fy}-${(fy + 1) % 100}.pdf` : `${pan}_Q${q + 1}_${fy}-${(fy + 1) % 100}_16A.pdf`; return new File([pdf(`Form ${c.form} ${qText(fy, q)} ${c.p.name} ${pan}`)], nm, { type: 'application/pdf' }); });
-}
-async function emailCerts(fy, q) {
-  if (!api.can('tdsp.send')) return toast('Not allowed for your role', 'error');
-  const cands = certCandidates(fy, q), pend = cands.map(c => ({ c, rec: certOf(fy, q, c.form, c.p.id) })).filter(x => x.rec && !x.rec.sentAt);
-  if (!pend.length) return toast('No certificates waiting to be sent', 'error');
-  const es = emailSettings(); let sent = 0; const miss = [];
-  for (const { c, rec } of pend) {
-    const p = api.get('parties', c.p.id), to = p.kind === 'employee' ? splitEmails(p.email).filter(validEmail) : emailRoute(p, 'tds_cert').to;
-    if (!to.length) { miss.push(p.name); continue; }
-    const t = es.templates.tds_cert || DEFAULT_EMAIL_TEMPLATES.tds_cert, vars = { party: (partyContacts(p).find(x => to.includes(x.email)) || {}).name || p.name, form: 'Form ' + c.form, quarter: c.form === '16' ? fyLabel(fy) : qText(fy, q), tds: money(c.tds), company: Store.data.settings.company };
-    const m = await api.queueEmail({ kind: 'tds_cert', entity: 'parties', entityId: p.id, partyId: p.id, to, cc: [], subject: fillTemplate(t.subject, vars), body: fillTemplate(t.body, vars), attachments: [rec.file] });
-    Object.assign(rec, { sentAt: nowISO(), emailId: m.id }); sent++;
-  }
-  const all16A = cands.filter(c => c.form === '16A').every(c => { const r = certOf(fy, q, '16A', c.p.id); return r && r.sentAt; });
-  if (all16A && cands.some(c => c.form === '16A')) { const k = 'f16a:' + qKey(fy, q); if (!(Store.data.compliance[k] || {}).done) { Store.data.compliance[k] = { done: true, at: nowISO(), by: api.me().id, ref: 'Emailed from TDS payable' }; api.log('update', 'compliance', k, `Form 16A ${qText(fy, q)} issued to all vendors`); } }
-  Store.persist(); render({ keepScroll: true });
-  toast(`${sent} certificate email${sent === 1 ? '' : 's'} queued${miss.length ? ' · no email for ' + miss.join(', ') : ''}`, miss.length ? 'error' : undefined);
-}
-/* ---------- page ---------- */
-PAGES.tdsp = {
-  title: 'TDS payable',
-  render() {
-    featureSettings(); tdsSettings();
-    if (!S.tdsp.ym) S.tdsp.ym = addMonths(ymOf(TODAY), -1);
-    const ym = S.tdsp.ym, M = tdsMonth(ym), st = M.status.status || 'draft', can = api.can('tdsp.edit') && st !== 'confirmed', T = S.tdsp.tab;
-    const fy = fyOf(ym + '-01'), q = quarterOf(ym + '-01'), months = fyMonths(fy).filter(m => m <= ymOf(TODAY));
-    const strip = `<div class="gst-strip">${months.map(m => { const X = tdsMonth(m), s2 = X.status.status || 'draft', warn = X.balance > 0.5 && TODAY > X.due; return `<button class="gst-m ${m === ym ? 'on' : ''}" data-act="tdsp-month" data-v="${m}"><span>${monthLabel(m)}</span><b class="num ${warn ? 'out' : ''}">${X.tds ? shortMoney(X.tds) : '—'}</b><i class="gst-dot ${s2}"></i></button>`; }).join('')}</div>`;
-    const changed = st !== 'draft' && M.status.snapshot && (Math.abs(M.status.snapshot.tds - M.tds) > 1 || Math.abs((M.status.snapshot.paid ?? M.paid) - M.paid) > 1);
-    const ch = tdsChecks(M);
-    const head = `<div class="bk-bar"><div class="row gst-nav" style="gap:8px"><button class="icon-btn" data-act="tdsp-step" data-v="-1" title="Previous month">${icon('chev').replace('<svg', '<svg style="transform:rotate(180deg)"')}</button><div><div style="font:600 18px var(--f-head)">${monthLabel(ym, true)}</div><div class="muted" style="font-size:12.5px">Deposit due ${fmtDate(M.due)} · ${qText(fy, q)} return due ${fmtDate(retDue(fy, q))}</div></div><button class="icon-btn" data-act="tdsp-step" data-v="1" title="Next month" ${ym >= ymOf(TODAY) ? 'disabled' : ''}>${icon('chev')}</button>
-      <span class="chip ${GST_STATUS[st][1]}" style="margin-left:6px">${GST_STATUS[st][0]}${st === 'sent' && M.status.sentAt ? ' · ' + fmtDate(M.status.sentAt.slice(0, 10)) : ''}${st === 'confirmed' && M.status.confirmedAt ? ' · ' + fmtDate(M.status.confirmedAt.slice(0, 10)) : ''}</span></div><span class="spacer"></span>
-      ${can && M.bySec.length ? `<button class="btn btn-sm" data-act="tdsp-challan" data-v="">${icon('plus')} Record challan</button>` : ''}
-      <button class="btn btn-sm" data-act="tdsp-dl">${icon('file')} Download Excel</button>
-      ${st !== 'confirmed' && api.can('tdsp.send') ? `<button class="btn btn-sm ${st === 'draft' ? 'btn-gold' : ''}" data-act="tdsp-send">${icon('send')} ${st === 'sent' ? 'Send again' : 'Send to CA'}</button>` : ''}
-      ${st === 'sent' && api.can('tdsp.confirm') ? `<button class="btn btn-sm btn-navy" data-act="tdsp-confirm">${icon('check')} CA confirmed</button>` : ''}
-      ${st === 'confirmed' && api.can('settings.edit') ? `<button class="btn btn-sm btn-ghost" data-act="tdsp-reopen">Reopen</button>` : ''}</div>`;
-    const late = M.overdue;
-    const kpis = `<div class="grid g-kpi gst-kpis">
-      <div class="card kpi"><div class="k-l">TDS deducted</div><div class="k-v">${money(M.tds)}</div><div class="k-s">${M.rows.length} deductions · ${M.bySec.length} section${M.bySec.length === 1 ? '' : 's'}</div></div>
-      <div class="card kpi"><div class="k-l">Deposited</div><div class="k-v in">${money(M.paid)}</div><div class="k-s">${M.challans.length} challan${M.challans.length === 1 ? '' : 's'}${M.challans.some(c => c.date > M.due) ? ' · <span class="out">some late</span>' : ''}</div></div>
-      <div class="card kpi ${late ? '' : 'accent'}"${late ? ' style="border-color:#F0C9C3"' : ''}><div class="k-l">Balance to deposit</div><div class="k-v ${late ? 'out' : ''}">${money(M.balance)}</div><div class="k-s">${M.balance > 0.5 ? (late ? diffDays(TODAY, M.due) + ' days late' : 'by ' + fmtDate(M.due)) : 'All deposited'}</div></div>
-      <div class="card kpi"><div class="k-l">Interest (est.)</div><div class="k-v ${M.interest - M.interestPaid > 1 ? 'out' : ''}">${money(M.interest)}</div><div class="k-s">${M.interestPaid ? money(M.interestPaid) + ' paid' : M.interest ? 'not paid yet' : 'none — deposited on time'}</div></div>
-      <div class="card kpi"><div class="k-l">Deductees</div><div class="k-v">${new Set(M.rows.map(r => r.party && r.party.id)).size}</div><div class="k-s">${M.rows.filter(r => r.sec === '192').length} salary · ${M.rows.filter(r => r.sec !== '192').length} others</div></div></div>`;
-    const banner = changed ? `<div class="notice" style="border-color:#F0C9C3;background:var(--out-soft)">${icon('alert')}<div><b>Figures changed after ${st === 'confirmed' ? 'confirmation' : 'sending'}.</b> TDS was ${money(M.status.snapshot.tds)}, now ${money(M.tds)}. ${st === 'sent' ? 'Send the working again.' : 'Reopen the month to review.'}</div></div>` : st === 'confirmed' ? `<div class="notice info">${icon('lock')}<div>Confirmed by the CA${M.status.note ? ' · ' + esc(M.status.note) : ''}. TDS on entries and challans of this month can't be changed until the Owner reopens it.</div></div>` : '';
-    const Q = tdsQuarter(fy, q), certs = certCandidates(fy, q);
-    const tabs = `<div class="tabs" style="margin-top:2px">${[['summary', 'Section summary'], ['deductions', 'Deductions', M.rows.length], ['challans', 'Challans', M.challans.length], ['deductees', 'Deductees'], ['return', 'Quarterly return'], ['certs', 'Form 16A / 16', certs.length], ['checks', 'Checks', ch.length]].map(([k, l, n]) => `<button class="${T === k ? 'on' : ''}" data-act="tdsp-tab" data-v="${k}">${l}${n !== undefined ? ` <span class="tw-n">${n}</span>` : ''}</button>`).join('')}</div>`;
-    let body = '';
-    if (T === 'summary') {
-      body = `<div class="card"><div class="tbl-wrap"><table class="tbl gst-3b tdsp-sum"><thead><tr><th>Section</th><th class="num">Deductees</th><th class="num">Paid / credited</th><th class="num">TDS</th><th class="num">Deposited</th><th class="num">Balance</th><th class="num">Interest</th><th>Challans</th><th></th></tr></thead><tbody>
-        ${M.bySec.map(s => `<tr><td><b>${esc(s.sec || '—')}</b> <span class="muted">${esc(s.n)}</span><div class="cell-sub">${s.form || ''}</div></td><td class="num">${s.deductees}</td><td class="num">${money(s.base)}</td><td class="num"><b>${money(s.tds)}</b></td><td class="num in">${gstMoney(s.paid)}</td><td class="num ${s.balance > 0.5 && TODAY > M.due ? 'out' : ''}">${gstMoney(s.balance)}</td><td class="num ${s.interest - s.interestPaid > 1 ? 'out' : ''}">${gstMoney(s.interest)}${s.accruing ? '<div class="cell-sub">accruing</div>' : ''}</td>
-          <td style="font-size:12px">${s.challans.map(c => `<a href="#" data-act="open-entry" data-id="${c.id}" class="mono">${esc(c.serial || 'challan')}</a> <span class="${c.date > M.due ? 'out' : 'muted'}">${fmtDate(c.date)}</span>`).join('<br>') || '<span class="faint">—</span>'}</td>
-          <td>${can && (s.balance > 0.5 || s.interest - s.interestPaid > 1) ? `<button class="btn btn-sm" data-act="tdsp-challan" data-v="${esc(s.sec)}">Record challan</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="9"><div class="empty">No TDS deducted this month.</div></td></tr>'}
-        ${M.bySec.length ? `<tr class="net"><td>Total</td><td></td><td class="num">${money(sum(M.bySec, s => s.base))}</td><td class="num">${money(M.tds)}</td><td class="num">${money(M.paid)}</td><td class="num">${money(M.balance)}</td><td class="num">${money(M.interest)}</td><td colspan="2"></td></tr>` : ''}
-        </tbody></table></div></div>
-        ${ch.length ? `<div class="card"><div class="card-h"><div class="grow"><h3>Before sending to the CA</h3><div class="sub">${ch.length} point${ch.length > 1 ? 's' : ''} in this month's records</div></div><button class="btn btn-sm" data-act="tdsp-tab" data-v="checks">See all</button></div>${ch.slice(0, 4).map(gstCheckRow).join('')}</div>` : ''}`;
-    } else if (T === 'deductions') {
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Deductions register</h3><div class="sub">Month of the earlier of bill date and payment date. Change a section here; it's remembered for that vendor.</div></div></div><div class="tbl-wrap"><table class="tbl gst-reg"><thead><tr><th>TDS date</th><th>Deductee · PAN</th><th>Category</th><th>Section</th><th class="num">Paid / credited</th><th class="num">Rate</th><th class="num">TDS</th><th>Challan</th></tr></thead><tbody>
-        ${M.rows.map(r => { const w = tdsFY(fy).wrong.find(x => x.e.id === r.id); return `<tr><td class="nowrap">${fmtDate(r.date)}<div class="cell-sub">${r.paidOn !== r.date ? 'paid ' + fmtDate(r.paidOn) : r.party && r.party.kind === 'employee' ? 'salary' : 'paid same day'}</div></td><td><div class="cell-main"><a href="#" data-act="open-entry" data-id="${r.id}">${esc(r.party ? r.party.name : '—')}</a></div><div class="cell-sub mono">${esc(r.pan || 'No PAN')}</div></td><td style="font-size:12.5px">${esc(r.cat)}</td>
-          <td>${can && r.sec !== '192' ? `<select class="select sel-sm" data-tds-sec="${r.id}">${opts(SEC_ORDER.filter(s => s !== '192').map(s => [s, s]), r.sec, r.sec ? null : '—')}</select>` : `<span class="mono">${esc(r.sec || '—')}</span>`}</td>
-          <td class="num">${money(r.base)}</td><td class="num ${w ? 'out' : ''}" ${w ? `title="Expected ${w.exp.rate}%"` : ''}>${r.rate}%</td><td class="num"><b>${money(r.tds)}</b></td><td style="font-size:12px" class="mono">${r.challan ? esc(r.challan.serial || '✓') : '<span class="out">—</span>'}</td></tr>`; }).join('') || '<tr><td colspan="8"><div class="empty">No TDS deducted this month.</div></td></tr>'}
-        </tbody>${M.rows.length ? `<tfoot><tr><td colspan="4">Total</td><td class="num">${money(sum(M.rows, r => r.base))}</td><td></td><td class="num">${money(M.tds)}</td><td></td></tr></tfoot>` : ''}</table></div></div>`;
-    } else if (T === 'challans') {
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Challans for ${monthLabel(ym, true)}</h3><div class="sub">One challan per section (ITNS 281). Due ${fmtDate(M.due)}.</div></div>${can && M.bySec.length ? `<button class="btn btn-sm btn-gold" data-act="tdsp-challan" data-v="">${icon('plus')} Record challan</button>` : ''}</div><div class="tbl-wrap"><table class="tbl gst-reg"><thead><tr><th>Paid on</th><th>Section</th><th>BSR code</th><th>Challan no.</th><th class="num">Tax</th><th class="num">Interest</th><th class="num">Fee</th><th class="num">Total</th><th></th></tr></thead><tbody>
-        ${M.challans.map(c => `<tr data-act="open-entry" data-id="${c.id}" style="cursor:pointer"><td>${fmtDate(c.date)}</td><td class="mono">${esc(c.sec || 'Not split')}</td><td class="mono">${esc(c.bsr || '—')}</td><td class="mono">${esc(c.serial || '—')}</td><td class="num">${money(c.tax)}</td><td class="num">${gstMoney(c.interest)}</td><td class="num">${gstMoney(c.fee)}</td><td class="num"><b>${money(c.amount)}</b></td><td>${c.date <= M.due ? '<span class="chip inflow">On time</span>' : `<span class="chip overdue">${diffDays(c.date, M.due)}d late</span>`}${!c.bsr || !c.serial ? ' <span class="chip gold">Add BSR / no.</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="9"><div class="empty">No challans recorded for this month.</div></td></tr>'}
-        </tbody></table></div></div>`;
-    } else if (T === 'deductees') {
-      const fyRows = months.flatMap(m => tdsMonth(m).rows), dw = deducteeTotals(fyRows), mon = deducteeTotals(M.rows);
-      const vend = dw.filter(x => x.sec !== '192'), emp = dw.filter(x => x.sec === '192');
-      const thr = x => { const S2 = TDS_SEC[x.sec]; return S2 && S2.agg ? `<span class="muted">limit ${shortMoney(S2.agg)}</span>` : S2 && S2.month ? `<span class="muted">${shortMoney(S2.month)}/month</span>` : ''; };
-      const row = x => { const m = mon.find(y => y.p === x.p && y.sec === x.sec), l = x.p && (x.p.ldc || []).filter(c => c.section === x.sec && c.to >= TODAY)[0]; return `<tr><td><div class="cell-main">${esc(x.p ? x.p.name : '—')}</div><div class="cell-sub mono">${esc(panOf(x.p) || 'No PAN')}</div></td><td class="mono">${esc(x.sec)}</td><td class="num">${m ? money(m.tds) : '<span class="faint">–</span>'}</td><td class="num">${money(x.base)}<div class="cell-sub">${thr(x)}</div></td><td class="num"><b>${money(x.tds)}</b></td>${x.sec !== '192' ? `<td>${l ? `<span class="chip gold">${esc(l.certNo)} · ${l.rate}%</span>` : ''}${api.can('tdsp.edit') && x.p ? ` <button class="btn btn-sm btn-ghost" data-act="tdsp-ldc" data-id="${x.p.id}">${l ? 'Edit' : '197 cert.'}</button>` : ''}</td>` : '<td></td>'}</tr>`; };
-      const tbl = (title, list) => `<div class="card"><div class="card-h"><h3 class="grow">${title} · ${fyLabel(fy)} to date</h3></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Deductee · PAN</th><th>Section</th><th class="num">${monthLabel(ym)}</th><th class="num">FY paid / credited</th><th class="num">FY TDS</th><th></th></tr></thead><tbody>${list.map(row).join('') || '<tr><td colspan="6"><div class="empty">None</div></td></tr>'}</tbody></table></div></div>`;
-      body = tbl('Vendors & professionals (26Q)', vend) + tbl('Employees (24Q)', emp);
-    } else if (T === 'return') {
-      const qs = Q.status.status || 'draft';
-      const formCard = F => `<div class="card"><div class="card-h"><div class="grow"><h3>${F.form} · ${F.form === '24Q' ? 'Salaries' : 'Vendors & professionals'}</h3><div class="sub">${F.deductees} deductees · ${F.rows.length} entries · TDS ${money(F.tds)} · due ${fmtDate(F.due)}</div></div>
-        ${F.filed ? `<span class="chip inflow">Filed ${fmtDate(F.filed.at.slice(0, 10))}${F.filed.ref ? ' · ' + esc(F.filed.ref) : ''}</span>` : F.fee ? `<span class="chip overdue">Late fee ~${money(F.fee)}</span>` : ''}
-        ${!F.filed && api.can('compliance.mark') && Q.months.length === 3 && quarterMonths(fy, q)[2] < ymOf(TODAY) ? `<button class="btn btn-sm" data-act="tdsp-filed" data-v="${F.key}">Mark filed</button>` : ''}</div>
-        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Deductee · PAN</th><th>Section</th><th class="num">Entries</th><th class="num">Paid / credited</th><th class="num">TDS</th><th>Deposited</th></tr></thead><tbody>
-        ${deducteeTotals(F.rows).map(x => { const rs = F.rows.filter(r => r.party === x.p && r.sec === x.sec), un = rs.filter(r => !r.challan).length; return `<tr><td><div class="cell-main">${esc(x.p ? x.p.name : '—')}</div><div class="cell-sub mono ${panOf(x.p) ? '' : 'out'}">${esc(panOf(x.p) || 'No PAN')}</div></td><td class="mono">${esc(x.sec)}</td><td class="num">${x.n}</td><td class="num">${money(x.base)}</td><td class="num"><b>${money(x.tds)}</b></td><td>${un ? `<span class="chip overdue">${un} not deposited</span>` : '<span class="chip inflow">Deposited</span>'}</td></tr>`; }).join('') || '<tr><td colspan="6"><div class="empty">Nothing this quarter.</div></td></tr>'}</tbody></table></div></div>`;
-      body = `<div class="bk-bar"><div><div style="font:600 16px var(--f-head)">${qText(fy, q)} · ${FY_Q(q).split(' ')[1]}</div><div class="muted" style="font-size:12.5px">${Q.months.length < 3 ? 'Quarter in progress · ' : ''}Returns due ${fmtDate(retDue(fy, q))} · Form 16A due ${fmtDate(addDays(retDue(fy, q), 15))}${qs === 'sent' ? ' · pack sent to CA ' + fmtDate(Q.status.sentAt.slice(0, 10)) : ''}</div></div><span class="spacer"></span>
-        <button class="btn btn-sm" data-act="tdsp-qdl">${icon('file')} Download return pack</button>${api.can('tdsp.send') ? `<button class="btn btn-sm ${qs === 'sent' ? '' : 'btn-gold'}" data-act="tdsp-qsend">${icon('send')} ${qs === 'sent' ? 'Send again' : 'Send to CA'}</button>` : ''}</div>
-        ${formCard(Q.forms[0])}${formCard(Q.forms[1])}`;
-    } else if (T === 'certs') {
-      const pend = certs.filter(c => { const r = certOf(fy, q, c.form, c.p.id); return r && !r.sentAt; }).length, um = S.tdsp.unmatched.filter(u => u.fy === fy && u.q === q);
-      const canC = api.can('tdsp.edit');
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Certificates · ${qText(fy, q)}</h3><div class="sub">Download Form 16A ${q === 3 ? 'and Form 16 ' : ''}from TRACES (or get them from the CA) and drop the PDFs here. Files are matched by the PAN in the file name, then by name.</div></div>
-        ${canC ? `<button class="btn btn-sm" data-act="tdsp-csample">${icon('bolt')} Try sample files</button><label class="btn btn-sm">${icon('upload')} Upload PDFs<input type="file" id="tcFiles" accept="application/pdf,.pdf" multiple style="display:none"></label>` : ''}
-        ${api.can('tdsp.send') ? `<button class="btn btn-sm btn-gold" data-act="tdsp-cmail" ${pend ? '' : 'disabled'}>${icon('send')} Email ${pend || ''} pending</button>` : ''}</div>
-        ${um.length ? `<div class="notice" style="margin:0 18px 12px">${icon('info')}<div><b>${um.length} file${um.length > 1 ? 's' : ''} couldn't be matched.</b> Choose who each belongs to.${um.map((u, i) => `<div class="row" style="gap:8px;margin-top:6px;flex-wrap:nowrap"><span class="mono" style="font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(u.meta.name)}</span><select class="select sel-sm" data-tc-assign="${S.tdsp.unmatched.indexOf(u)}"><option value="">Assign to…</option>${certs.map(c => `<option value="${c.form}|${c.p.id}">${esc(c.p.name)} · ${c.form}</option>`).join('')}</select></div>`).join('')}</div></div>` : ''}
-        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Deductee · PAN</th><th>Form</th><th class="num">TDS</th><th>File</th><th>Status</th></tr></thead><tbody>
-        ${certs.map(c => { const r = certOf(fy, q, c.form, c.p.id), em = c.p.kind === 'employee' ? splitEmails(c.p.email)[0] : emailRoute(c.p, 'tds_cert').to[0]; return `<tr><td><div class="cell-main">${esc(c.p.name)}</div><div class="cell-sub mono">${esc(panOf(c.p) || 'No PAN')} · ${esc(em || 'no email')}</div></td><td>Form ${c.form}${c.form === '16' ? ' <span class="muted">(FY)</span>' : ''}</td><td class="num">${money(c.tds)}</td><td style="font-size:12.5px">${r ? `<a href="#" data-act="tdsp-cview" data-id="${r.file.id}">${esc(r.file.name)}</a>` : '<span class="faint">Not uploaded</span>'}</td><td>${r && r.sentAt ? `<span class="chip inflow">Emailed ${fmtDate(r.sentAt.slice(0, 10))}</span>` : r ? '<span class="chip gold">Ready to send</span>' : '<span class="chip">Waiting</span>'}</td></tr>`; }).join('') || '<tr><td colspan="5"><div class="empty">No deductees this quarter.</div></td></tr>'}
-        </tbody></table></div>${q !== 3 ? '<div class="muted" style="padding:10px 18px 14px;font-size:12.5px">Form 16 for employees appears in Q4 (issued once a year, by 15 June).</div>' : ''}</div>`;
-    } else {
-      body = `<div class="card"><div class="card-h"><div class="grow"><h3>Checks</h3><div class="sub">Missed deductions above the limits, wrong rates, late or missing deposits, expired lower-deduction certificates.</div></div></div>${ch.map(gstCheckRow).join('') || '<div class="empty"><b>No issues found</b>The TDS records for this month look complete.</div>'}</div>`;
-    }
-    return `<div class="stack">${strip}${head}${banner}${kpis}${tabs}${body}</div>`;
-  },
-};
-function tdsSettingsCard() {
-  const T = tdsSettings(), owner = api.can('settings.edit'), dis = owner ? '' : 'disabled';
-  return `<div class="card" id="tdsSettings"><div class="card-h"><div class="grow"><h3>TDS</h3><div class="sub">Deductor details for challans and returns. The CA email is shared with GST.</div></div></div><div class="card-b"><form id="tsForm" class="fgrid">
-    <div class="field"><label>TAN</label><input class="input mono" name="tan" value="${esc(T.tan)}" placeholder="MUMI12345A" ${dis}></div>
-    <div class="field"><label>Usual BSR code</label><input class="input mono" name="bsr" value="${esc(T.bsr)}" maxlength="7" ${dis}><div class="hint">Your bank branch code on challans</div></div>
-    </form>${owner ? '<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn btn-navy" data-act="ts-save">Save</button></div>' : ''}</div></div>`;
-}
-Object.assign(ACT, {
-  'tdsp-month': el => { S.tdsp.ym = el.dataset.v; render({ keepScroll: true }); },
-  'tdsp-step': el => { const n = addMonths(S.tdsp.ym, +el.dataset.v); if (n <= ymOf(TODAY)) { S.tdsp.ym = n; render({ keepScroll: true }); } },
-  'tdsp-tab': el => { if (S.page !== 'tdsp') location.hash = '#/tdsp'; S.tdsp.tab = el.dataset.v || el.dataset.id; render({ keepScroll: true }); },
-  'tdsp-challan': el => challanModal(S.tdsp.ym, el.dataset.v || el.dataset.id || ''),
-  'tdsp-dl': async () => { const f = await sheetsToFile(tdsMonthSheets(S.tdsp.ym), `TDS-working-${S.tdsp.ym}-IUOVA`); downloadFile(f); toast('Downloaded ' + f.name); },
-  'tdsp-send': () => sendTdsMonth(S.tdsp.ym),
-  'tdsp-qdl': async () => { const fy = fyOf(S.tdsp.ym + '-01'), q = quarterOf(S.tdsp.ym + '-01'); const f = await sheetsToFile(tdsQuarterSheets(fy, q), `TDS-returns-${qKey(fy, q)}-IUOVA`); downloadFile(f); toast('Downloaded ' + f.name); },
-  'tdsp-qsend': () => sendTdsQuarter(fyOf(S.tdsp.ym + '-01'), quarterOf(S.tdsp.ym + '-01')),
-  'tdsp-filed': el => markFiled(el.dataset.v),
-  'tdsp-confirm': () => { const ym = S.tdsp.ym; const ov = openModal(`<div class="modal-h"><h2>CA confirmed TDS for ${monthLabel(ym, true)}</h2></div><div class="modal-b"><div class="field"><label>Note</label><input class="input" id="tcNote" placeholder="e.g. Challans verified"></div><div class="hint" style="margin-top:8px">The month locks: TDS on entries and challans in it can't be changed until the Owner reopens it.</div></div><div class="modal-f"><button class="btn" data-x="no">Cancel</button><button class="btn btn-gold" data-x="yes">Confirm & lock</button></div>`, 'sm');
-    ov.addEventListener('click', ev => { const b = ev.target.closest('[data-x]'); if (!b) return; if (b.dataset.x === 'yes') { Store.data.tdsMonths[ym] = { ...(Store.data.tdsMonths[ym] || {}), status: 'confirmed', confirmedAt: nowISO(), by: api.me().id, note: $('#tcNote', ov).value.trim(), snapshot: tdsSnap(ym) }; api.log('lock', 'tdsMonths', ym, `TDS ${monthLabel(ym, true)} confirmed by CA`); Store.persist(); toast('Confirmed and locked'); render({ keepScroll: true }); } ov.remove(); }); },
-  'tdsp-reopen': async () => { const ym = S.tdsp.ym; if (!await confirmBox({ title: `Reopen TDS for ${monthLabel(ym, true)}?`, body: 'Changes become possible again. Send the working to the CA again after any change.', ok: 'Reopen' })) return; Store.data.tdsMonths[ym] = { ...(Store.data.tdsMonths[ym] || {}), status: 'draft', reopenedAt: nowISO() }; api.log('unlock', 'tdsMonths', ym, `TDS ${monthLabel(ym, true)} reopened`); Store.persist(); render({ keepScroll: true }); },
-  'tdsp-ldc': el => ldcModal(el.dataset.id),
-  'tdsp-csample': () => { const fy = fyOf(S.tdsp.ym + '-01'), q = quarterOf(S.tdsp.ym + '-01'); addCertFiles(sampleCertFiles(fy, q), fy, q); },
-  'tdsp-cmail': () => emailCerts(fyOf(S.tdsp.ym + '-01'), quarterOf(S.tdsp.ym + '-01')),
-  'tdsp-cview': async el => { const f = await FileStore.get(el.dataset.id); if (!f) return toast('File not found', 'error'); window.open(URL.createObjectURL(f.blob), '_blank'); },
-  'ts-save': () => { const f = $('#tsForm'), T = tdsSettings(); const tan = f.tan.value.trim().toUpperCase(), bsr = f.bsr.value.trim(); if (tan && !/^[A-Z]{4}\d{5}[A-Z]$/.test(tan)) return toast('TAN should look like MUMI12345A', 'error'); if (bsr && !/^\d{7}$/.test(bsr)) return toast('BSR code is 7 digits', 'error'); Object.assign(T, { tan, bsr }); api.log('update', 'settings', 'tds', 'TDS settings updated'); Store.persist(); toast('Saved'); render({ keepScroll: true }); },
-});
-document.addEventListener('change', async ev => {
-  if (ev.target.id === 'tcFiles' && ev.target.files.length) { const fs = [...ev.target.files]; ev.target.value = ''; addCertFiles(fs, fyOf(S.tdsp.ym + '-01'), quarterOf(S.tdsp.ym + '-01')); }
-  const a = ev.target.closest && ev.target.closest('[data-tc-assign]');
-  if (a && a.value) { const u = S.tdsp.unmatched[+a.dataset.tcAssign]; const [form, pid] = a.value.split('|'); saveCert(u.fy, u.q, form, pid, u.meta); S.tdsp.unmatched.splice(+a.dataset.tcAssign, 1); Store.persist(); render({ keepScroll: true }); toast('Assigned'); }
-  const s = ev.target.closest && ev.target.closest('[data-tds-sec]');
-  if (s) { const id = s.dataset.tdsSec, e = api.get('entries', id); try { assertTdsOpen([ymOf(tdsDateOf(e))], 'this entry'); await api.update('entries', id, { tdsSection: s.value }, { summary: `TDS section ${s.value} on ${describe('entries', e)}` }); const p = api.get('parties', e.partyId); if (p && p.kind === 'vendor') await api.update('parties', p.id, { tdsSection: s.value }, { summary: `Default TDS section ${s.value} · ${p.name}` }); render({ keepScroll: true }); toast('Section updated'); } catch (err) { toast(err.message, 'error'); render({ keepScroll: true }); } }
-});
-
-
-// ES Module Exports for React + TypeScript Integration
-export {
-  Store,
-  FileStore,
-  Calc,
-  Sales,
-  api,
-  S,
-  PAGES,
-  NAV,
-  NAV_PINNED,
-  navCounts,
-  go,
-  route,
-  render,
-  renderChrome,
-  boot,
-  openEntryForm,
-  openOrderForm,
-  openPiForm,
-  openPartyForm,
-  openBankImport,
-  openCompose,
-  confirmBox,
-  toast,
-  money,
-  fmtDate,
-  monthLabel,
-  fyOf,
-  ROLES,
-  ACT,
-  IC,
-  computeCashflowInflowRows
-};
-
-if (typeof window !== 'undefined') {
-  (window as any).Store = Store;
-  (window as any).api = api;
-  (window as any).IuovaCore = {
-    Store,
-    FileStore,
-    Calc,
-    Sales,
-    api,
-    S,
-    PAGES,
-    NAV,
-    NAV_PINNED,
-    navCounts,
-    go,
-    route,
-    render,
-    boot,
-    toast,
-    confirmBox
-  };
-}
+    const cat = pr && /^RET/.test(pr.code) ? 'cat_retain' : o && o.type === 'Email' 
+... [truncated for diff preview]

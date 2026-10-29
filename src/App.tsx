@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { boot, go, route, render, S, api, Store, FileStore, computeCashflowInflowRows } from './lib/coreEngine';
+import { boot, go, route, render, S, api, Store, FileStore, computeCashflowInflowRows, computeCashflowPeopleRows, computeCashflowOutflowProjectCostRows, computeCashflowOutflowCapexRows, computeCashflowOutflowFinancingAndOwnerRows, computeCashflowOutflowOfficeFixedRows, computeCashflowOutflowOfficeVariableRows, computeCashflowOutflowTravelRows, computeCashflowOutflowProfessionalAdminRows } from './lib/coreEngine';
 import { SupabaseService, isSupabaseConfigured, STATE_NAME_TO_CODE, STATE_CODE_TO_NAME } from './lib/supabase';
 import { AddClientModal } from './components/AddClientModal';
 import { AddVendorModal } from './components/AddVendorModal';
@@ -31,6 +31,9 @@ export interface CloudStatus {
   incomeCount?: number;
   financingCount?: number;
   cashInflowCount?: number;
+  peopleCount?: number;
+  projectCostCount?: number;
+  capexCount?: number;
 }
 
 // Convert Supabase fss_client and fss_client_people rows into CRM party format
@@ -1407,12 +1410,23 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Hydrate Cashflow Inflow from Supabase (fss_operation_receipts, fss_income, fss_cash_inflow)
+  // Hydrate Cashflow Inflow from Supabase (fss_operation_receipts, fss_income, fss_financing, fss_cash_inflow, fss_outflow_oc_people)
   const loadSupabaseCashflowTables = useCallback(async () => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let result = await SupabaseService.loadAllCashflowInflowFromSupabase();
+      let [result, peopleRows, peopleReport, projectCostRows, capexRows, financingAndOwnerRows, officeFixedRows, officeVariableRows, travelRows, professionalAdminRows] = await Promise.all([
+        SupabaseService.loadAllCashflowInflowFromSupabase(),
+        SupabaseService.loadPeopleFromSupabase(),
+        SupabaseService.loadPeopleReportFromSupabase(),
+        SupabaseService.loadProjectCostFromSupabase(),
+        SupabaseService.loadCapexFromSupabase(),
+        SupabaseService.loadFinancingAndOwnerFromSupabase(),
+        SupabaseService.loadOfficeFixedFromSupabase(),
+        SupabaseService.loadOfficeVariableFromSupabase(),
+        SupabaseService.loadTravelFromSupabase(),
+        SupabaseService.loadProfessionalAdminFromSupabase()
+      ]);
 
       // If tables are empty in Supabase, auto-seed with computed local UI cashflow
       const currentFy = (typeof S !== 'undefined' && S.fy) ? S.fy : 2026;
@@ -1433,11 +1447,93 @@ export const App: React.FC = () => {
         }
       }
 
+      let finalPeopleRows = peopleRows;
+      let finalPeopleReport = peopleReport;
+      let finalProjectCostRows = projectCostRows;
+      let finalCapexRows = capexRows;
+      let finalFinancingAndOwnerRows = financingAndOwnerRows;
+      let finalOfficeFixedRows = officeFixedRows;
+      let finalOfficeVariableRows = officeVariableRows;
+      let finalTravelRows = travelRows;
+      let finalProfessionalAdminRows = professionalAdminRows;
+      if (finalPeopleRows.length === 0 && Store.data?.entries) {
+        const computedPeople = computeCashflowPeopleRows(Store.data.entries, currentFy);
+        if (computedPeople) {
+          const syncRes = await SupabaseService.syncPeopleToSupabase(computedPeople);
+          finalPeopleRows = syncRes.people;
+          finalPeopleReport = syncRes.peopleReport;
+        }
+      }
+      if (finalProjectCostRows.length === 0 && Store.data?.entries) {
+        const computedProjectCost = computeCashflowOutflowProjectCostRows(Store.data.entries, currentFy);
+        if (computedProjectCost) {
+          const syncRes = await SupabaseService.syncProjectCostToSupabase(computedProjectCost.rows);
+          finalProjectCostRows = syncRes.projectCost;
+        }
+      }
+      const allCapexNull = finalCapexRows.length > 0 && finalCapexRows.every((r: any) => ['jan_26','feb_26','mar_26','apr_26','may_26','jun_26','jul_26','aug_26','sep_26','oct_26','nov_26','dec_26'].every((m: string) => r[m] == null));
+      if ((finalCapexRows.length === 0 || allCapexNull) && Store.data?.entries) {
+        const computedCapex = computeCashflowOutflowCapexRows(Store.data.entries, currentFy);
+        if (computedCapex) {
+          const syncRes = await SupabaseService.syncCapexToSupabase(computedCapex.rows);
+          finalCapexRows = syncRes.capex;
+        }
+      }
+      const allFinancingOwnerNull = finalFinancingAndOwnerRows.length > 0 && finalFinancingAndOwnerRows.every((r: any) => ['jan_26','feb_26','mar_26','apr_26','may_26','jun_26','jul_26','aug_26','sep_26','oct_26','nov_26','dec_26'].every((m: string) => r[m] == null));
+      if ((finalFinancingAndOwnerRows.length === 0 || allFinancingOwnerNull) && Store.data?.entries) {
+        const computedFinancingAndOwner = computeCashflowOutflowFinancingAndOwnerRows(Store.data.entries, currentFy);
+        if (computedFinancingAndOwner) {
+          const syncRes = await SupabaseService.syncFinancingAndOwnerToSupabase(computedFinancingAndOwner.rows);
+          finalFinancingAndOwnerRows = syncRes.financingAndOwner;
+        }
+      }
+      const allOfficeFixedNull = finalOfficeFixedRows.length > 0 && finalOfficeFixedRows.every((r: any) => ['jan26','feb26','mar26','apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].every((m: string) => r[m] == null));
+      if ((finalOfficeFixedRows.length === 0 || allOfficeFixedNull) && Store.data?.entries) {
+        const computedOfficeFixed = computeCashflowOutflowOfficeFixedRows(Store.data.entries, currentFy);
+        if (computedOfficeFixed) {
+          const syncRes = await SupabaseService.syncOfficeFixedToSupabase(computedOfficeFixed.rows);
+          finalOfficeFixedRows = syncRes.officeFixed;
+        }
+      }
+      const allOfficeVariableNull = finalOfficeVariableRows.length > 0 && finalOfficeVariableRows.every((r: any) => ['jan26','feb26','mar26','apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].every((m: string) => r[m] == null));
+      if ((finalOfficeVariableRows.length === 0 || allOfficeVariableNull) && Store.data?.entries) {
+        const computedOfficeVariable = computeCashflowOutflowOfficeVariableRows(Store.data.entries, currentFy);
+        if (computedOfficeVariable) {
+          const syncRes = await SupabaseService.syncOfficeVariableToSupabase(computedOfficeVariable.rows);
+          finalOfficeVariableRows = syncRes.officeVariable;
+        }
+      }
+      const allTravelNull = finalTravelRows.length > 0 && finalTravelRows.every((r: any) => ['jan26','feb26','mar26','apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].every((m: string) => r[m] == null));
+      if ((finalTravelRows.length === 0 || allTravelNull) && Store.data?.entries) {
+        const computedTravel = computeCashflowOutflowTravelRows(Store.data.entries, currentFy);
+        if (computedTravel) {
+          const syncRes = await SupabaseService.syncTravelToSupabase(computedTravel.rows);
+          finalTravelRows = syncRes.travel;
+        }
+      }
+      const allProfessionalAdminNull = finalProfessionalAdminRows.length > 0 && finalProfessionalAdminRows.every((r: any) => ['jan26','feb26','mar26','apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].every((m: string) => r[m] == null));
+      if ((finalProfessionalAdminRows.length === 0 || allProfessionalAdminNull) && Store.data?.entries) {
+        const computedProfessionalAdmin = computeCashflowOutflowProfessionalAdminRows(Store.data.entries, currentFy);
+        if (computedProfessionalAdmin) {
+          const syncRes = await SupabaseService.syncProfessionalAdminToSupabase(computedProfessionalAdmin.rows);
+          finalProfessionalAdminRows = syncRes.professionalAdmin;
+        }
+      }
+
       if (Store.data) {
         Store.data.fss_operation_receipts = result.operationReceipts;
         Store.data.fss_income = result.income;
         Store.data.fss_financing = result.financing;
         Store.data.fss_cash_inflow = result.cashInflow;
+        Store.data.fss_outflow_oc_people = finalPeopleRows;
+        Store.data.fss_outflow_oc_people_report = finalPeopleReport;
+        Store.data.fss_outflow_project_cost = finalProjectCostRows;
+        Store.data.fss_outflow_capex = finalCapexRows;
+        Store.data.fss_outflow_financing_and_owner = finalFinancingAndOwnerRows;
+        Store.data.fss_outflow_oc_office_fixed = finalOfficeFixedRows;
+        Store.data.fss_outflow_oc_office_variable = finalOfficeVariableRows;
+        Store.data.fss_outflow_oc_travel = finalTravelRows;
+        Store.data.fss_outflow_oc_professional_admin = finalProfessionalAdminRows;
 
         // Auto-heal if Supabase ever differs from UI (e.g. outdated fy_to_date, share, or jan_26 > 0)
         const computed = Store.data?.entries
@@ -1484,6 +1580,27 @@ export const App: React.FC = () => {
           Store.data.fss_financing = result.financing;
           Store.data.fss_cash_inflow = result.cashInflow;
         }
+
+        const computedPeople = Store.data?.entries
+          ? computeCashflowPeopleRows(Store.data.entries, currentFy)
+          : null;
+        const hasPeopleDiscrepancy = computedPeople && (
+          (finalPeopleRows || []).some((r: any) => {
+            const compRow = (computedPeople as any[])?.find((c: any) => c.id === r.id);
+            return compRow && (
+              Number(r.oct_26) !== Number(compRow.oct_26) ||
+              Number(r.may_26) !== Number(compRow.may_26) ||
+              Number(r.apr_26) !== Number(compRow.apr_26)
+            );
+          })
+        );
+        if (hasPeopleDiscrepancy && computedPeople) {
+          const syncRes = await SupabaseService.syncPeopleToSupabase(computedPeople);
+          finalPeopleRows = syncRes.people;
+          finalPeopleReport = syncRes.peopleReport;
+          Store.data.fss_outflow_oc_people = finalPeopleRows;
+          Store.data.fss_outflow_oc_people_report = finalPeopleReport;
+        }
         render({ keepScroll: true });
       }
 
@@ -1495,6 +1612,9 @@ export const App: React.FC = () => {
         incomeCount: result.income.length,
         financingCount: result.financing.length,
         cashInflowCount: result.cashInflow.length,
+        peopleCount: finalPeopleRows.length,
+        projectCostCount: finalProjectCostRows.length,
+        capexCount: finalCapexRows.length,
         lastSynced: new Date().toLocaleTimeString(),
         error: null
       }));
@@ -1834,18 +1954,76 @@ export const App: React.FC = () => {
             financing: computed.financingRows
           };
 
-          const synced = await SupabaseService.syncCashflowInflowToSupabase(payloads);
+          const peoplePayload = computeCashflowPeopleRows(entriesList, currentFy);
+          const [synced, peopleSynced] = await Promise.all([
+            SupabaseService.syncCashflowInflowToSupabase(payloads),
+            SupabaseService.syncPeopleToSupabase(peoplePayload)
+          ]);
+          const projectCostComputed = computeCashflowOutflowProjectCostRows(entriesList, currentFy);
+          const projectCostSynced = projectCostComputed
+            ? await SupabaseService.syncProjectCostToSupabase(projectCostComputed.rows)
+            : null;
+          const capexComputed = computeCashflowOutflowCapexRows(entriesList, currentFy);
+          const capexSynced = capexComputed
+            ? await SupabaseService.syncCapexToSupabase(capexComputed.rows)
+            : null;
+          const financingAndOwnerComputed = computeCashflowOutflowFinancingAndOwnerRows(entriesList, currentFy);
+          const financingAndOwnerSynced = financingAndOwnerComputed
+            ? await SupabaseService.syncFinancingAndOwnerToSupabase(financingAndOwnerComputed.rows)
+            : null;
+          const officeFixedComputed = computeCashflowOutflowOfficeFixedRows(entriesList, currentFy);
+          const officeFixedSynced = officeFixedComputed
+            ? await SupabaseService.syncOfficeFixedToSupabase(officeFixedComputed.rows)
+            : null;
+          const officeVariableComputed = computeCashflowOutflowOfficeVariableRows(entriesList, currentFy);
+          const officeVariableSynced = officeVariableComputed
+            ? await SupabaseService.syncOfficeVariableToSupabase(officeVariableComputed.rows)
+            : null;
+          const travelComputed = computeCashflowOutflowTravelRows(entriesList, currentFy);
+          const travelSynced = travelComputed
+            ? await SupabaseService.syncTravelToSupabase(travelComputed.rows)
+            : null;
+          const professionalAdminComputed = computeCashflowOutflowProfessionalAdminRows(entriesList, currentFy);
+          const professionalAdminSynced = professionalAdminComputed
+            ? await SupabaseService.syncProfessionalAdminToSupabase(professionalAdminComputed.rows)
+            : null;
           if (Store.data) {
             Store.data.fss_operation_receipts = synced.operationReceipts;
             Store.data.fss_income = synced.income;
             Store.data.fss_financing = synced.financing;
             Store.data.fss_cash_inflow = synced.cashInflow;
+            Store.data.fss_outflow_oc_people = peopleSynced.people;
+            Store.data.fss_outflow_oc_people_report = peopleSynced.peopleReport;
+            if (projectCostSynced) {
+              Store.data.fss_outflow_project_cost = projectCostSynced.projectCost;
+            }
+            if (capexSynced) {
+              Store.data.fss_outflow_capex = capexSynced.capex;
+            }
+            if (financingAndOwnerSynced) {
+              Store.data.fss_outflow_financing_and_owner = financingAndOwnerSynced.financingAndOwner;
+            }
+            if (officeFixedSynced) {
+              Store.data.fss_outflow_oc_office_fixed = officeFixedSynced.officeFixed;
+            }
+            if (officeVariableSynced) {
+              Store.data.fss_outflow_oc_office_variable = officeVariableSynced.officeVariable;
+            }
+            if (travelSynced) {
+              Store.data.fss_outflow_oc_travel = travelSynced.travel;
+            }
+            if (professionalAdminSynced) {
+              Store.data.fss_outflow_oc_professional_admin = professionalAdminSynced.professionalAdmin;
+            }
             // Suppress sync loop when updating local store with synced data
             isSyncingCashflow = true;
             try {
               Store.persist();
             } finally {
               isSyncingCashflow = false;
+            }
+            if (typeof render === 'function') {
+              render({ keepScroll: true });
             }
           }
           setCloudStatus(prev => ({
@@ -1854,6 +2032,8 @@ export const App: React.FC = () => {
             incomeCount: synced.income.length,
             financingCount: synced.financing.length,
             cashInflowCount: synced.cashInflow.length,
+            peopleCount: peopleSynced.people.length,
+            projectCostCount: projectCostSynced?.projectCost?.length ?? (Store.data?.fss_outflow_project_cost || []).length,
             lastSynced: new Date().toLocaleTimeString()
           }));
           return synced;
@@ -2087,6 +2267,89 @@ export const App: React.FC = () => {
         }
       };
 
+      // Direct cell edit handler for People Outflow (fss_outflow_oc_people)
+      (window as any).__updatePeopleCell = async (idOrCategory: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updatePeopleCell(idOrCategory, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_outflow_oc_people = res.allRows;
+            Store.data.fss_outflow_oc_people_report = res.reportRows;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updatePeopleCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Add new People entry
+      (window as any).__addPeopleExpense = async (categoryName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addPeopleExpense(categoryName, monthlyAmounts);
+          await loadSupabaseCashflowTables();
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addPeopleExpense:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Direct cell edit handler for Project Costs Outflow (fss_outflow_project_cost)
+      (window as any).__updateProjectCostCell = async (idOrCategory: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateProjectCostCell(idOrCategory, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_outflow_project_cost = res.allRows;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateProjectCostCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Add new Project Costs entry
+      (window as any).__addProjectCostExpense = async (categoryName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addProjectCostExpense(categoryName, monthlyAmounts);
+          await loadSupabaseCashflowTables();
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addProjectCostExpense:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
       (window as any).openAddClientModal = () => setShowAddClientModal(true);
       (window as any).openAddVendorModal = () => setShowAddVendorModal(true);
       (window as any).openAddEmployeeModal = () => setShowAddEmployeeModal(true);
@@ -2156,6 +2419,10 @@ export const App: React.FC = () => {
       delete (window as any).__addIncome;
       delete (window as any).__updateFinancingCell;
       delete (window as any).__addFinancing;
+      delete (window as any).__updatePeopleCell;
+      delete (window as any).__addPeopleExpense;
+      delete (window as any).__updateProjectCostCell;
+      delete (window as any).__addProjectCostExpense;
       delete (window as any).openAddClientModal;
       delete (window as any).openAddVendorModal;
       delete (window as any).openAddEmployeeModal;
@@ -2281,10 +2548,11 @@ export const App: React.FC = () => {
                   Departments: <code>fss_departments</code>.<br />
                   Bank Accounts: <code>fss_bank_accounts</code>.<br />
                   Categories: <code>fss_categories</code>.<br />
-                  Cashflow Inflow: <code>fss_operation_receipts</code> ({cloudStatus.operationReceiptCount ?? '—'}), <code>fss_income</code> ({cloudStatus.incomeCount ?? '—'}), <code>fss_financing</code> ({cloudStatus.financingCount ?? '—'}), <code>fss_cash_inflow</code> ({cloudStatus.cashInflowCount ?? '—'}).
+                  Cashflow Inflow: <code>fss_operation_receipts</code> ({cloudStatus.operationReceiptCount ?? '—'}), <code>fss_income</code> ({cloudStatus.incomeCount ?? '—'}), <code>fss_financing</code> ({cloudStatus.financingCount ?? '—'}), <code>fss_cash_inflow</code> ({cloudStatus.cashInflowCount ?? '—'}).<br />
+                  People Outflow: <code>fss_outflow_oc_people</code> ({cloudStatus.peopleCount ?? '—'}), <code>fss_outflow_oc_people_report</code> (View).
                 </p>
                 <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--muted)' }}>
-                  Target tables: <code>public.fss_operation_receipts</code>, <code>public.fss_income</code>, <code>public.fss_financing</code>, <code>public.fss_cash_inflow</code>, <code>public.fss_table_transactions</code>, <code>public.fss_table_orders</code>, <code>public.fss_client</code>, <code>public.fss_vendor</code>, <code>public.fss_employe</code>, <code>public.fss_other_parties</code>, <code>public.fss_projects</code>, <code>public.fss_departments</code>, <code>public.fss_bank_accounts</code>, <code>public.fss_categories</code>
+                  Target tables: <code>public.fss_operation_receipts</code>, <code>public.fss_income</code>, <code>public.fss_financing</code>, <code>public.fss_cash_inflow</code>, <code>public.fss_outflow_oc_people</code>, <code>public.fss_table_transactions</code>, <code>public.fss_table_orders</code>, <code>public.fss_client</code>, <code>public.fss_vendor</code>, <code>public.fss_employe</code>, <code>public.fss_other_parties</code>, <code>public.fss_projects</code>, <code>public.fss_departments</code>, <code>public.fss_bank_accounts</code>, <code>public.fss_categories</code>
                 </div>
               </div>
 
