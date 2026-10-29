@@ -1673,6 +1673,7 @@ PAGES.dashboard = {
       </tbody><tfoot><tr><td>Total</td><td class="num in">${money(sum(depNodes, n => n.ins))}</td><td class="num out">${money(totOut)}</td><td class="num">${money(sum(depNodes, n => n.ins) - totOut, { sign: true })}</td><td></td><td></td></tr></tfoot></table></div></div>`;
 
     // outflow by bucket — expandable to categories
+    const catTotals = aggregate(ents.filter(e => e.type === 'outflow' && filt(e)), [{ months: months }], e => e.categoryId);
     const bNodes = finishTree(categoryTree('outflow', c => catTotals[c.id] || [0], 'dash:b:'), 1);
     bNodes.forEach(n => {
       if (n.children) {
@@ -1710,7 +1711,7 @@ PAGES.dashboard = {
         <div><span>Order book (to invoice)</span><b>${money(bookAmt)}</b></div>
         <div><span>Unpaid PIs</span><b class="${unp.some(x => x.overdueDays) ? 'out' : ''}">${money(sum(unp, x => x.outstanding))}</b><em>${unp.filter(x => x.overdueDays).length} overdue</em></div>
       </div></div>`;
-    return `<div class="stack">${kpis}${sales}${chart}<div class="grid g-12">${upcoming}${accounts}</div>${typeof dashActionCards === 'function' ? dashActionCards() : `<div class="grid g-2">${complianceCard()}</div>`}${deptTbl}<div class="grid g-2">${catCard}${recentCard}</div></div>`;
+    return `<div class="stack">${kpis}${sales}${chart}<div class="grid g-12">${upcoming}${accounts}</div>${typeof dashActionCards === 'function' ? dashActionCards() : (typeof complianceCard === 'function' ? `<div class="grid g-2">${complianceCard()}</div>` : '')}${deptTbl}<div class="grid g-2">${catCard}${recentCard}</div></div>`;
   },
   after() {
     const months = fyMonths(S.fy); const dept = S.dashDept;
