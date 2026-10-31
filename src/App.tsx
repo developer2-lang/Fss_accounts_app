@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { boot, go, route, render, S, api, Store, FileStore, computeCashflowInflowRows, computeCashflowPeopleRows, computeCashflowOutflowProjectCostRows, computeCashflowOutflowCapexRows, computeCashflowOutflowFinancingAndOwnerRows, computeCashflowOutflowOfficeFixedRows, computeCashflowOutflowOfficeVariableRows, computeCashflowOutflowTravelRows, computeCashflowOutflowProfessionalAdminRows } from './lib/coreEngine';
+import { boot, go, route, render, S, api, Store, FileStore, computeCashflowInflowRows, computeCashflowPeopleRows, computeCashflowOutflowProjectCostRows, computeCashflowOutflowCapexRows, computeCashflowOutflowFinancingAndOwnerRows, computeCashflowOutflowOfficeFixedRows, computeCashflowOutflowOfficeVariableRows, computeCashflowOutflowTravelRows, computeCashflowOutflowProfessionalAdminRows, computeCashflowOutflowTaxStatutoryRows } from './lib/coreEngine';
 import { SupabaseService, isSupabaseConfigured, STATE_NAME_TO_CODE, STATE_CODE_TO_NAME } from './lib/supabase';
 import { AddClientModal } from './components/AddClientModal';
 import { AddVendorModal } from './components/AddVendorModal';
@@ -578,6 +578,10 @@ export function convertFssTransactionToLocal(
   const gstAmount = Number(tx.gst_amount) || 0;
   const tdsAmount = Number(tx.tds_amount) || 0;
   const netAmount = Math.abs(Number(tx.net_cash)) || Math.abs(taxable + gstAmount - tdsAmount);
+  const taxPeriodMatch = String(tx.description || '').match(/for (January|February|March|April|May|June|July|August|September|October|November|December) (\d{4})/i);
+  const taxPeriod = taxPeriodMatch
+    ? `${taxPeriodMatch[2]}-${String(['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'].indexOf(taxPeriodMatch[1].toLowerCase()) + 1).padStart(2, '0')}`
+    : undefined;
 
   return {
     id: localId,
@@ -590,6 +594,7 @@ export function convertFssTransactionToLocal(
     partyId: partyId || undefined,
     projectId: projectId || undefined,
     description: tx.description || '',
+    taxPeriod: taxPeriod || match?.taxPeriod,
     refNo: tx.reference_number || '',
     taxable,
     gstType: (gstAmount > 0 ? 'intra' : 'none') as 'intra' | 'none',
@@ -1411,11 +1416,11 @@ export const App: React.FC = () => {
   }, []);
 
   // Hydrate Cashflow Inflow from Supabase (fss_operation_receipts, fss_income, fss_financing, fss_cash_inflow, fss_outflow_oc_people)
-  const loadSupabaseCashflowTables = useCallback(async () => {
+  const loadSupabaseCashflowTables = useCallback(async (opts?: { skipAutoSeed?: boolean }) => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let [result, peopleRows, peopleReport, projectCostRows, capexRows, financingAndOwnerRows, officeFixedRows, officeVariableRows, travelRows, professionalAdminRows] = await Promise.all([
+      let [result, peopleRows, peopleReport, projectCostRows, capexRows, financingAndOwnerRows, officeFixedRows, officeVariableRows, travelRows, professionalAdminRows, taxStatutoryRows] = await Promise.all([
         SupabaseService.loadAllCashflowInflowFromSupabase(),
         SupabaseService.loadPeopleFromSupabase(),
         SupabaseService.loadPeopleReportFromSupabase(),
@@ -1425,7 +1430,8 @@ export const App: React.FC = () => {
         SupabaseService.loadOfficeFixedFromSupabase(),
         SupabaseService.loadOfficeVariableFromSupabase(),
         SupabaseService.loadTravelFromSupabase(),
-        SupabaseService.loadProfessionalAdminFromSupabase()
+        SupabaseService.loadProfessionalAdminFromSupabase(),
+        SupabaseService.loadTaxStatutoryFromSupabase()
       ]);
 
       // If tables are empty in Supabase, auto-seed with computed local UI cashflow
@@ -1456,6 +1462,7 @@ export const App: React.FC = () => {
       let finalOfficeVariableRows = officeVariableRows;
       let finalTravelRows = travelRows;
       let finalProfessionalAdminRows = professionalAdminRows;
+      let finalTaxStatutoryRows = taxStatutoryRows;
       if (finalPeopleRows.length === 0 && Store.data?.entries) {
         const computedPeople = computeCashflowPeopleRows(Store.data.entries, currentFy);
         if (computedPeople) {
@@ -1464,7 +1471,8 @@ export const App: React.FC = () => {
           finalPeopleReport = syncRes.peopleReport;
         }
       }
-      if (finalProjectCostRows.length === 0 && Store.data?.entries) {
+      const needsProjectCostSeed = !opts?.skipAutoSeed && finalProjectCostRows.length === 0;
+      if (needsProjectCostSeed && Store.data?.entries) {
         const computedProjectCost = computeCashflowOutflowProjectCostRows(Store.data.entries, currentFy);
         if (computedProjectCost) {
           const syncRes = await SupabaseService.syncProjectCostToSupabase(computedProjectCost.rows);
@@ -1512,11 +1520,21 @@ export const App: React.FC = () => {
         }
       }
       const allProfessionalAdminNull = finalProfessionalAdminRows.length > 0 && finalProfessionalAdminRows.every((r: any) => ['jan26','feb26','mar26','apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].every((m: string) => r[m] == null));
-      if ((finalProfessionalAdminRows.length === 0 || allProfessionalAdminNull) && Store.data?.entries) {
+      const needsProfessionalAdminSeed = !opts?.skipAutoSeed && (finalProfessionalAdminRows.length === 0 || allProfessionalAdminNull);
+      if (needsProfessionalAdminSeed && Store.data?.entries) {
         const computedProfessionalAdmin = computeCashflowOutflowProfessionalAdminRows(Store.data.entries, currentFy);
         if (computedProfessionalAdmin) {
           const syncRes = await SupabaseService.syncProfessionalAdminToSupabase(computedProfessionalAdmin.rows);
           finalProfessionalAdminRows = syncRes.professionalAdmin;
+        }
+      }
+      const allTaxStatutoryNull = finalTaxStatutoryRows.length > 0 && finalTaxStatutoryRows.every((r: any) => ['jan_26','feb_26','mar_26','apr_26','may_26','jun_26','jul_26','aug_26','sep_26','oct_26','nov_26','dec_26'].every((m: string) => r[m] == null));
+      const needsTaxStatutorySeed = !opts?.skipAutoSeed && (finalTaxStatutoryRows.length === 0 || allTaxStatutoryNull);
+      if (needsTaxStatutorySeed && Store.data?.entries) {
+        const computedTaxStatutory = computeCashflowOutflowTaxStatutoryRows(Store.data.entries, currentFy);
+        if (computedTaxStatutory) {
+          const syncRes = await SupabaseService.syncTaxStatutoryToSupabase(computedTaxStatutory.rows);
+          finalTaxStatutoryRows = syncRes.taxStatutory;
         }
       }
 
@@ -1534,6 +1552,7 @@ export const App: React.FC = () => {
         Store.data.fss_outflow_oc_office_variable = finalOfficeVariableRows;
         Store.data.fss_outflow_oc_travel = finalTravelRows;
         Store.data.fss_outflow_oc_professional_admin = finalProfessionalAdminRows;
+        Store.data.fss_outflow_tax_statutory = finalTaxStatutoryRows;
 
         // Auto-heal if Supabase ever differs from UI (e.g. outdated fy_to_date, share, or jan_26 > 0)
         const computed = Store.data?.entries
@@ -1601,6 +1620,7 @@ export const App: React.FC = () => {
           Store.data.fss_outflow_oc_people = finalPeopleRows;
           Store.data.fss_outflow_oc_people_report = finalPeopleReport;
         }
+
         render({ keepScroll: true });
       }
 
@@ -1650,6 +1670,9 @@ export const App: React.FC = () => {
   useEffect(() => {
     let mounted = true;
     let cashflowDebounceTimer: any = null;
+    // Set when a Supabase-backed Cashflow write (e.g. Project Costs cell update) has just been applied,
+    // so the auto re-sync from local entries does not overwrite the freshly saved Supabase value.
+    let cashflowSyncSuppress = false;
 
     const init = async () => {
       // 1. Boot original application engine
@@ -1945,6 +1968,35 @@ export const App: React.FC = () => {
         try {
           const currentFy = (typeof S !== 'undefined' && S.fy) ? S.fy : 2026;
           const entriesList = Store.data?.entries || [];
+          const officeFixedComputed = computeCashflowOutflowOfficeFixedRows(entriesList, currentFy);
+          const officeVariableComputed = computeCashflowOutflowOfficeVariableRows(entriesList, currentFy);
+          if (officeFixedComputed && Store.data) {
+            Store.data.fss_outflow_oc_office_fixed = officeFixedComputed.rows;
+          }
+          if (officeVariableComputed && Store.data) {
+            Store.data.fss_outflow_oc_office_variable = officeVariableComputed.rows;
+          }
+          if ((officeFixedComputed || officeVariableComputed) && Store.data) {
+            Store.persist();
+            if (typeof render === 'function') {
+              render({ keepScroll: true });
+            }
+          }
+          const [officeFixedSynced, officeVariableSynced] = await Promise.all([
+            officeFixedComputed
+              ? SupabaseService.syncOfficeFixedToSupabase(officeFixedComputed.rows)
+              : Promise.resolve(null),
+            officeVariableComputed
+              ? SupabaseService.syncOfficeVariableToSupabase(officeVariableComputed.rows)
+              : Promise.resolve(null)
+          ]);
+          if (officeFixedSynced && Store.data) {
+            Store.data.fss_outflow_oc_office_fixed = officeFixedSynced.officeFixed;
+          }
+          if (officeVariableSynced && Store.data) {
+            Store.data.fss_outflow_oc_office_variable = officeVariableSynced.officeVariable;
+          }
+
           const computed = computeCashflowInflowRows(entriesList, currentFy);
           if (!computed) return null;
 
@@ -1971,14 +2023,6 @@ export const App: React.FC = () => {
           const financingAndOwnerSynced = financingAndOwnerComputed
             ? await SupabaseService.syncFinancingAndOwnerToSupabase(financingAndOwnerComputed.rows)
             : null;
-          const officeFixedComputed = computeCashflowOutflowOfficeFixedRows(entriesList, currentFy);
-          const officeFixedSynced = officeFixedComputed
-            ? await SupabaseService.syncOfficeFixedToSupabase(officeFixedComputed.rows)
-            : null;
-          const officeVariableComputed = computeCashflowOutflowOfficeVariableRows(entriesList, currentFy);
-          const officeVariableSynced = officeVariableComputed
-            ? await SupabaseService.syncOfficeVariableToSupabase(officeVariableComputed.rows)
-            : null;
           const travelComputed = computeCashflowOutflowTravelRows(entriesList, currentFy);
           const travelSynced = travelComputed
             ? await SupabaseService.syncTravelToSupabase(travelComputed.rows)
@@ -1986,6 +2030,10 @@ export const App: React.FC = () => {
           const professionalAdminComputed = computeCashflowOutflowProfessionalAdminRows(entriesList, currentFy);
           const professionalAdminSynced = professionalAdminComputed
             ? await SupabaseService.syncProfessionalAdminToSupabase(professionalAdminComputed.rows)
+            : null;
+          const taxStatutoryComputed = computeCashflowOutflowTaxStatutoryRows(entriesList, currentFy);
+          const taxStatutorySynced = taxStatutoryComputed
+            ? await SupabaseService.syncTaxStatutoryToSupabase(taxStatutoryComputed.rows)
             : null;
           if (Store.data) {
             Store.data.fss_operation_receipts = synced.operationReceipts;
@@ -2014,6 +2062,9 @@ export const App: React.FC = () => {
             }
             if (professionalAdminSynced) {
               Store.data.fss_outflow_oc_professional_admin = professionalAdminSynced.professionalAdmin;
+            }
+            if (taxStatutorySynced) {
+              Store.data.fss_outflow_tax_statutory = taxStatutorySynced.taxStatutory;
             }
             // Suppress sync loop when updating local store with synced data
             isSyncingCashflow = true;
@@ -2068,6 +2119,13 @@ export const App: React.FC = () => {
 
       (window as any).__onCashflowDataChanged = () => {
         if (!isSupabaseConfigured || isSyncingCashflow) return;
+        if (cashflowSyncSuppress) {
+          // A Supabase-backed Cashflow write just happened (e.g. Project Costs cell update).
+          // Do not trigger the entries-derived re-sync, otherwise it overwrites the saved Supabase value.
+          cashflowSyncSuppress = false;
+          if (cashflowDebounceTimer) { clearTimeout(cashflowDebounceTimer); cashflowDebounceTimer = null; }
+          return;
+        }
         if (cashflowDebounceTimer) clearTimeout(cashflowDebounceTimer);
         cashflowDebounceTimer = setTimeout(() => {
           triggerCashflowSync();
@@ -2111,9 +2169,9 @@ export const App: React.FC = () => {
         return res;
       };
 
-      (window as any).__supabaseCancelTransaction = async (idOrSupabaseId: string | number) => {
+      (window as any).__supabaseCancelTransaction = async (idOrSupabaseId: string | number, entry?: any) => {
         if (!isSupabaseConfigured) return false;
-        const res = await SupabaseService.cancelTransaction(idOrSupabaseId);
+        const res = await SupabaseService.cancelTransaction(idOrSupabaseId, entry);
         try {
           await triggerCashflowSync();
         } catch (e) {
@@ -2122,9 +2180,9 @@ export const App: React.FC = () => {
         return res;
       };
 
-      (window as any).__supabaseDeleteTransaction = async (idOrSupabaseId: string | number) => {
+      (window as any).__supabaseDeleteTransaction = async (idOrSupabaseId: string | number, entry?: any) => {
         if (!isSupabaseConfigured) return false;
-        const ok = await SupabaseService.deleteTransaction(idOrSupabaseId);
+        const ok = await SupabaseService.deleteTransaction(idOrSupabaseId, entry);
         if (ok) {
           setCloudStatus(prev => ({
             ...prev,
@@ -2317,6 +2375,7 @@ export const App: React.FC = () => {
           const res = await SupabaseService.updateProjectCostCell(idOrCategory, monthCol, newValue);
           if (Store.data) {
             Store.data.fss_outflow_project_cost = res.allRows;
+            cashflowSyncSuppress = true;
             Store.persist();
           }
           setCloudStatus(prev => ({
@@ -2349,6 +2408,289 @@ export const App: React.FC = () => {
           throw err;
         }
       };
+
+      // Direct cell edit handler for Tax & Statutory Outflow (fss_outflow_tax_statutory)
+      (window as any).__updateTaxStatutoryCell = async (idOrCategory: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateTaxStatutoryCell(idOrCategory, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_outflow_tax_statutory = res.allRows;
+            cashflowSyncSuppress = true;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateTaxStatutoryCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Add new Tax & Statutory entry
+      (window as any).__addTaxStatutoryExpense = async (categoryName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addTaxStatutoryExpense(categoryName, monthlyAmounts);
+          await loadSupabaseCashflowTables({ skipAutoSeed: true });
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addTaxStatutoryExpense:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Direct cell edit handler for Travel Outflow (fss_outflow_oc_travel)
+      (window as any).__updateTravelCell = async (idOrCategory: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateTravelCell(idOrCategory, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_outflow_oc_travel = res.allRows;
+            cashflowSyncSuppress = true;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateTravelCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      (window as any).__addTravelExpense = async (categoryName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addTravelExpense(categoryName, monthlyAmounts);
+          await loadSupabaseCashflowTables({ skipAutoSeed: true });
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addTravelExpense:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Direct cell edit handler for Professional & Admin Outflow (fss_outflow_oc_professional_admin)
+      (window as any).__updateProfessionalAdminCell = async (idOrCategory: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateProfessionalAdminCell(idOrCategory, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_outflow_oc_professional_admin = res.allRows;
+            cashflowSyncSuppress = true;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateProfessionalAdminCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      (window as any).__addProfessionalAdminExpense = async (categoryName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addProfessionalAdminExpense(categoryName, monthlyAmounts);
+          await loadSupabaseCashflowTables({ skipAutoSeed: true });
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addProfessionalAdminExpense:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Direct cell edit handler for Office Fixed Outflow (fss_outflow_oc_office_fixed)
+      (window as any).__updateOfficeFixedCell = async (idOrCategory: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateOfficeFixedCell(idOrCategory, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_outflow_oc_office_fixed = res.allRows;
+            cashflowSyncSuppress = true;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateOfficeFixedCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      (window as any).__addOfficeFixedExpense = async (categoryName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addOfficeFixedExpense(categoryName, monthlyAmounts);
+          await loadSupabaseCashflowTables({ skipAutoSeed: true });
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addOfficeFixedExpense:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Direct cell edit handler for Office Variable Outflow (fss_outflow_oc_office_variable)
+      (window as any).__updateOfficeVariableCell = async (idOrCategory: number | string, monthCol: string, newValue: number | string) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.updateOfficeVariableCell(idOrCategory, monthCol, newValue);
+          if (Store.data) {
+            Store.data.fss_outflow_oc_office_variable = res.allRows;
+            cashflowSyncSuppress = true;
+            Store.persist();
+          }
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            lastSynced: new Date().toLocaleTimeString(),
+            error: null
+          }));
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __updateOfficeVariableCell:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      (window as any).__addOfficeVariableExpense = async (categoryName: string, monthlyAmounts: Record<string, number> = {}) => {
+        if (!isSupabaseConfigured) return null;
+        setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+        try {
+          const res = await SupabaseService.addOfficeVariableExpense(categoryName, monthlyAmounts);
+          await loadSupabaseCashflowTables({ skipAutoSeed: true });
+          render({ keepScroll: true });
+          return res;
+        } catch (err: any) {
+          console.error('Error in __addOfficeVariableExpense:', err);
+          setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+          throw err;
+        }
+      };
+
+      // Delete handlers for Cash Outflow (fss_outflow_*) tables
+      const registerOutflowDelete = (globalName: string, serviceMethod: string, opts?: { skipAutoSeed?: boolean }) => {
+        (window as any)[globalName] = async (idOrKey: any, monthCol?: string) => {
+          if (!isSupabaseConfigured) return false;
+          setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
+          try {
+            const ok = await (SupabaseService as any)[serviceMethod](idOrKey, monthCol);
+            if (!ok) throw new Error(`Failed to delete record from Supabase.`);
+            await loadSupabaseCashflowTables(opts);
+            setCloudStatus(prev => ({ ...prev, syncing: false, lastSynced: new Date().toLocaleTimeString(), error: null }));
+            render({ keepScroll: true });
+            return true;
+          } catch (err: any) {
+            console.error(`Error in ${globalName}:`, err);
+            setCloudStatus(prev => ({ ...prev, syncing: false, error: err.message }));
+            throw err;
+          }
+        };
+      };
+
+      registerOutflowDelete('__deletePeople', 'deletePeople', { skipAutoSeed: true });
+      registerOutflowDelete('__deletePeopleExpense', 'deletePeopleExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deletePeopleFromSupabase', 'deletePeopleFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deletePeopleRow', 'deletePeopleRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteProjectCost', 'deleteProjectCost', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteProjectCostExpense', 'deleteProjectCostExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteProjectCostFromSupabase', 'deleteProjectCostFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteProjectCostRow', 'deleteProjectCostRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteCapex', 'deleteCapex', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteCapexExpense', 'deleteCapexExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteCapexFromSupabase', 'deleteCapexFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteCapexRow', 'deleteCapexRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteFinancingAndOwner', 'deleteFinancingAndOwner', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteFinancingAndOwnerExpense', 'deleteFinancingAndOwnerExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteFinancingAndOwnerFromSupabase', 'deleteFinancingAndOwnerFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteFinancingAndOwnerRow', 'deleteFinancingAndOwnerRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteOfficeFixed', 'deleteOfficeFixed', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeFixedExpense', 'deleteOfficeFixedExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeFixedFromSupabase', 'deleteOfficeFixedFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeFixedRow', 'deleteOfficeFixedRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteOfficeVariable', 'deleteOfficeVariable', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeVariableExpense', 'deleteOfficeVariableExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeVariableFromSupabase', 'deleteOfficeVariableFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeVariableRow', 'deleteOfficeVariableRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteTravel', 'deleteTravel', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteTravelExpense', 'deleteTravelExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteTravelFromSupabase', 'deleteTravelFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteTravelRow', 'deleteTravelRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteProfessionalAdmin', 'deleteProfessionalAdmin', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteProfessionalAdminExpense', 'deleteProfessionalAdminExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteProfessionalAdminFromSupabase', 'deleteProfessionalAdminFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteProfessionalAdminRow', 'deleteProfessionalAdminRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteOperationCost', 'deleteOperationCost', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOperationCostExpense', 'deleteOperationCostExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOperationCostFromSupabase', 'deleteOperationCostFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOperationCostRow', 'deleteOperationCostRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteTaxStatutory', 'deleteTaxStatutory', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteTaxStatutoryExpense', 'deleteTaxStatutoryExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteTaxStatutoryFromSupabase', 'deleteTaxStatutoryFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteTaxStatutoryRow', 'deleteTaxStatutoryRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteOfficeTravel', 'deleteOfficeTravel', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeTravelExpense', 'deleteOfficeTravelExpense', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeTravelFromSupabase', 'deleteOfficeTravelFromSupabase', { skipAutoSeed: true });
+      registerOutflowDelete('__deleteOfficeTravelRow', 'deleteOfficeTravelRow', { skipAutoSeed: true });
+
+      registerOutflowDelete('__deleteOutflowRecord', 'deleteOutflowRecord', { skipAutoSeed: true });
 
       (window as any).openAddClientModal = () => setShowAddClientModal(true);
       (window as any).openAddVendorModal = () => setShowAddVendorModal(true);
@@ -2423,6 +2765,33 @@ export const App: React.FC = () => {
       delete (window as any).__addPeopleExpense;
       delete (window as any).__updateProjectCostCell;
       delete (window as any).__addProjectCostExpense;
+      delete (window as any).__updateTaxStatutoryCell;
+      delete (window as any).__addTaxStatutoryExpense;
+      delete (window as any).__updateTravelCell;
+      delete (window as any).__addTravelExpense;
+      delete (window as any).__updateProfessionalAdminCell;
+      delete (window as any).__addProfessionalAdminExpense;
+      delete (window as any).__updateOfficeFixedCell;
+      delete (window as any).__addOfficeFixedExpense;
+      delete (window as any).__updateOfficeVariableCell;
+      delete (window as any).__addOfficeVariableExpense;
+
+      // Clean up outflow delete handlers
+      const outflowDeleteNames = [
+        '__deletePeople', '__deletePeopleExpense', '__deletePeopleFromSupabase', '__deletePeopleRow',
+        '__deleteProjectCost', '__deleteProjectCostExpense', '__deleteProjectCostFromSupabase', '__deleteProjectCostRow',
+        '__deleteCapex', '__deleteCapexExpense', '__deleteCapexFromSupabase', '__deleteCapexRow',
+        '__deleteFinancingAndOwner', '__deleteFinancingAndOwnerExpense', '__deleteFinancingAndOwnerFromSupabase', '__deleteFinancingAndOwnerRow',
+        '__deleteOfficeFixed', '__deleteOfficeFixedExpense', '__deleteOfficeFixedFromSupabase', '__deleteOfficeFixedRow',
+        '__deleteOfficeVariable', '__deleteOfficeVariableExpense', '__deleteOfficeVariableFromSupabase', '__deleteOfficeVariableRow',
+        '__deleteTravel', '__deleteTravelExpense', '__deleteTravelFromSupabase', '__deleteTravelRow',
+        '__deleteProfessionalAdmin', '__deleteProfessionalAdminExpense', '__deleteProfessionalAdminFromSupabase', '__deleteProfessionalAdminRow',
+        '__deleteOperationCost', '__deleteOperationCostExpense', '__deleteOperationCostFromSupabase', '__deleteOperationCostRow',
+        '__deleteTaxStatutory', '__deleteTaxStatutoryExpense', '__deleteTaxStatutoryFromSupabase', '__deleteTaxStatutoryRow',
+        '__deleteOfficeTravel', '__deleteOfficeTravelExpense', '__deleteOfficeTravelFromSupabase', '__deleteOfficeTravelRow',
+        '__deleteOutflowRecord'
+      ];
+      outflowDeleteNames.forEach(n => delete (window as any)[n]);
       delete (window as any).openAddClientModal;
       delete (window as any).openAddVendorModal;
       delete (window as any).openAddEmployeeModal;
@@ -2639,5 +3008,3 @@ export const App: React.FC = () => {
 };
 
 export default App;
-
-
