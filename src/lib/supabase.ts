@@ -4518,15 +4518,21 @@ export const SupabaseService = {
     const rows = recomputeCapexFyAndShares(capexRows || []);
     const synced: any[] = [];
 
-    try {
-      const computedNames = new Set(rows.map((r: any) => String(r.category || '').trim().toLowerCase()));
-      const { data: existingRows } = await supabase.from('fss_outflow_capex').select('id, category');
-      for (const er of existingRows || []) {
-        if (!computedNames.has(String(er.category || '').trim().toLowerCase())) {
-          await supabase.from('fss_outflow_capex').delete().eq('id', er.id);
-        }
+    const normalizeCategory = (category: any) => String(category || '').trim().toLowerCase();
+    const computedNames = new Set(rows.map((r: any) => normalizeCategory(r.category)));
+    const { data: existingRows, error: existingErr } = await supabase
+      .from('fss_outflow_capex')
+      .select('id, category');
+    if (existingErr) throw existingErr;
+    for (const er of existingRows || []) {
+      if (!computedNames.has(normalizeCategory(er.category))) {
+        const { error: deleteErr } = await supabase
+          .from('fss_outflow_capex')
+          .delete()
+          .eq('id', er.id);
+        if (deleteErr) throw deleteErr;
       }
-    } catch (e) { console.warn('Stale cleanup failed for capex:', e); }
+    }
 
     for (const row of rows) {
       const category = (row.category || '').trim();
@@ -4563,6 +4569,22 @@ export const SupabaseService = {
     }
 
     const allRows = await this.loadCapexFromSupabase();
+    for (const row of rows) {
+      const persisted = allRows.find((r: any) => normalizeCategory(r.category) === normalizeCategory(row.category));
+      if (!persisted) {
+        throw new Error(`Capex row "${row.category}" was not found after syncing to Supabase.`);
+      }
+      for (const month of CAPEX_MONTH_COLS) {
+        const expected = row[month];
+        const actual = persisted[month];
+        const matches = expected == null
+          ? actual == null
+          : Number.isFinite(Number(actual)) && Math.abs(Number(actual) - Number(expected)) < 0.01;
+        if (!matches) {
+          throw new Error(`Capex row "${row.category}" did not save the expected ${month} value to Supabase.`);
+        }
+      }
+    }
     return { capex: allRows };
   },
 
@@ -4768,6 +4790,21 @@ export const SupabaseService = {
     }
 
     const allRows = await this.loadFinancingAndOwnerFromSupabase();
+    const loadedByCategory = new Map(
+      allRows.map((row: any) => [String(row.category || '').trim().toLowerCase(), row])
+    );
+    for (const row of rows) {
+      const category = String(row.category || '').trim();
+      const loaded = loadedByCategory.get(category.toLowerCase());
+      if (!loaded) {
+        throw new Error(`Financing & Owner row "${category}" was not reloaded from Supabase.`);
+      }
+      for (const month of FINANCING_OWNER_MONTH_COLS) {
+        if (Number(loaded[month] || 0) !== Number(row[month] || 0)) {
+          throw new Error(`Financing & Owner value for "${category}" (${month}) did not match Supabase.`);
+        }
+      }
+    }
     return { financingAndOwner: allRows };
   },
 
@@ -5177,7 +5214,8 @@ export const SupabaseService = {
       const { data: existingRows } = await supabase.from('fss_outflow_oc_travel').select('id, category');
       for (const er of existingRows || []) {
         if (!computedNames.has(String(er.category || '').trim().toLowerCase())) {
-          await supabase.from('fss_outflow_oc_travel').delete().eq('id', er.id);
+          const { error } = await supabase.from('fss_outflow_oc_travel').delete().eq('id', er.id);
+          if (error) throw error;
         }
       }
     } catch (e) { console.warn('Stale cleanup failed for travel:', e); }
@@ -5196,28 +5234,42 @@ export const SupabaseService = {
       payload.fy_to_date = row.fy_to_date === null || row.fy_to_date === undefined ? null : Number(row.fy_to_date);
       payload.share = Number(row.share || 0);
 
-      let { data: existing } = await supabase
+      const { data: existing, error: lookupError } = await supabase
         .from('fss_outflow_oc_travel')
         .select('*')
         .ilike('category', categoryName);
-      if ((!existing || existing.length === 0) && (categoryName.toLowerCase().includes('total') || categoryName.toLowerCase() === 'travel')) {
+      if (lookupError) throw lookupError;
+      let existingRowsForCategory = existing;
+      if ((!existingRowsForCategory || existingRowsForCategory.length === 0) && (categoryName.toLowerCase().includes('total') || categoryName.toLowerCase() === 'travel')) {
         const alt = await supabase
           .from('fss_outflow_oc_travel')
           .select('*')
           .or('category.ilike.Travel Total,category.ilike.Travel');
-        if (alt.data && alt.data.length > 0) {
-          existing = alt.data;
-        }
+        if (alt.error) throw alt.error;
+        if (alt.data && alt.data.length > 0) existingRowsForCategory = alt.data;
       }
-      if (existing && existing.length > 0) {
-        const ex = existing[0];
+      if (existingRowsForCategory && existingRowsForCategory.length > 0) {
+        const ex = existingRowsForCategory[0];
         payload.category = ex.category;
-        await supabase.from('fss_outflow_oc_travel').update(payload).eq('id', ex.id);
+        const { error } = await supabase.from('fss_outflow_oc_travel').update(payload).eq('id', ex.id);
+        if (error) throw error;
       } else {
-        await supabase.from('fss_outflow_oc_travel').insert(payload);
+        const { error } = await supabase.from('fss_outflow_oc_travel').insert(payload);
+        if (error) throw error;
       }
     }
     const allRows = await this.loadTravelFromSupabase();
+    const loadedNames = new Set(allRows.map((r: any) => String(r.category || '').trim().toLowerCase()));
+    const missingCategories = rows
+      .map((r: any) => String(r.category || '').trim())
+      .filter((name: string) => {
+        const normalized = name.toLowerCase();
+        return name && !loadedNames.has(normalized) &&
+          !(normalized.includes('total') && loadedNames.has('travel'));
+      });
+    if (missingCategories.length > 0) {
+      throw new Error(`Travel rows were not reloaded from Supabase: ${missingCategories.join(', ')}.`);
+    }
     return { travel: allRows };
   },
 

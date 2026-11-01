@@ -2104,8 +2104,13 @@ export const App: React.FC = () => {
           isSyncingCashflow = true;
           pendingSyncRequested = false;
           await doSyncCashflowInflow();
-        } catch (e) {
+        } catch (e: any) {
           console.warn('Cashflow sync to Supabase failed:', e);
+          setCloudStatus(prev => ({
+            ...prev,
+            syncing: false,
+            error: e?.message || 'Cashflow sync to Supabase failed.'
+          }));
         } finally {
           isSyncingCashflow = false;
           if (pendingSyncRequested) {

@@ -3034,17 +3034,11 @@ export function computeCashflowOutflowTravelRows(entries?: any[], fy = 2026) {
         monthlyData[m.col] = null;
       } else {
         const isDeleted = deletedCashKeys.has(norm(catName) + '|' + m.ym);
-        if (isDeleted) {
-          monthlyData[m.col] = 0;
-        } else {
-          const matchingOutflows = activeOutflows.filter((e: any) => matchFn(e) && (e.date || '').slice(0, 7) === m.ym);
-          let sum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
-          const fallback = fallbackValues[catName]?.[m.col] || 0;
-          if (sum === 0 || sum < fallback) {
-            sum = fallback;
-          }
-          monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
-        }
+        const matchingOutflows = activeOutflows.filter((e: any) => matchFn(e) && (e.date || '').slice(0, 7) === m.ym);
+        const entrySum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+        const fallback = fallbackValues[catName]?.[m.col] || 0;
+        const sum = matchingOutflows.length > 0 ? entrySum : isDeleted ? 0 : fallback;
+        monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
       }
     }
     const fytd = monthCols.reduce((acc: number, m) => {
@@ -3143,17 +3137,11 @@ export function computeCashflowOutflowProfessionalAdminRows(entries?: any[], fy 
         monthlyData[m.col] = null;
       } else {
         const isDeleted = deletedCashKeys.has(norm(catName) + '|' + m.ym);
-        if (isDeleted) {
-          monthlyData[m.col] = 0;
-        } else {
-          const matchingOutflows = activeOutflows.filter((e: any) => matchFn(e) && (e.date || '').slice(0, 7) === m.ym);
-          let sum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
-          const fallback = fallbackValues[catName]?.[m.col] || 0;
-          if (sum === 0 || sum < fallback) {
-            sum = fallback;
-          }
-          monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
-        }
+        const matchingOutflows = activeOutflows.filter((e: any) => matchFn(e) && (e.date || '').slice(0, 7) === m.ym);
+        const entrySum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+        const fallback = fallbackValues[catName]?.[m.col] || 0;
+        const sum = matchingOutflows.length > 0 ? entrySum : isDeleted ? 0 : fallback;
+        monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
       }
     }
     const fytd = monthCols.reduce((acc: number, m) => {
@@ -3327,21 +3315,44 @@ export function computeCashflowOutflowCapexRows(entries?: any[], fy = 2026) {
     { col: 'dec_26', ym: '2026-12' }
   ];
 
+  const norm = (value: string) => String(value || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+  const deletedCashKeys = deletedCategoryMonthKeys(allEntries, (e: any) => (
+    typeof api !== 'undefined' && typeof api.get === 'function'
+      ? (api.get('categories', e.categoryId)?.name || e.category || '')
+      : (e.category || '')
+  ));
   const fallbackValues: Record<string, Record<string, number>> = {
     'Equipment & Hardware': { apr_26: 0, may_26: 0, jun_26: 336300, jul_26: 0, aug_26: 0, sep_26: 0, oct_26: 636, nov_26: 0, dec_26: 0 }
   };
 
+  const categories = typeof api !== 'undefined' && typeof api.list === 'function'
+    ? api.list('categories').filter((c: any) => c.type === 'outflow' && bucketOf(c) === 'capex')
+    : [
+        { id: 'cat_equip', name: 'Equipment & Hardware' },
+        { id: 'cat_lic', name: 'Software Licences (Perpetual)' },
+        { id: 'cat_furn', name: 'Furniture & Fit-out' }
+      ];
   const childRows: any[] = [];
-  for (const catName of ['Equipment & Hardware']) {
+  for (const category of categories) {
+    const catName = String(category.name || '').trim();
+    if (!catName) continue;
     const monthlyData: Record<string, any> = {};
     for (const m of monthCols) {
       if (!m.ym) {
         monthlyData[m.col] = null;
       } else {
-        const matching = activeOutflows.filter((e: any) => (e.date || '').slice(0, 7) === m.ym && String(e.category || '').toLowerCase().includes('equipment'));
-        let sum = matching.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+        const matching = activeOutflows.filter((e: any) => {
+          if ((e.date || '').slice(0, 7) !== m.ym) return false;
+          if (String(e.categoryId || '') === String(category.id || '')) return true;
+          const entryCategory = typeof api !== 'undefined' && typeof api.get === 'function'
+            ? (api.get('categories', e.categoryId)?.name || e.category || '')
+            : (e.category || '');
+          return norm(entryCategory) === norm(catName);
+        });
+        const entrySum = matching.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+        const isDeleted = deletedCashKeys.has(norm(catName) + '|' + m.ym);
         const fb = fallbackValues[catName]?.[m.col] || 0;
-        if (sum === 0 || sum < fb) sum = fb;
+        const sum = matching.length > 0 ? entrySum : isDeleted ? 0 : fb;
         monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
       }
     }
@@ -3350,6 +3361,7 @@ export function computeCashflowOutflowCapexRows(entries?: any[], fy = 2026) {
       return acc;
     }, 0);
     childRows.push({
+      categoryId: category.id,
       category: catName,
       ...monthlyData,
       fy_to_date: Math.round(fytd * 100) / 100
@@ -3407,6 +3419,12 @@ export function computeCashflowOutflowFinancingAndOwnerRows(entries?: any[], fy 
     { col: 'dec_26', ym: '2026-12' }
   ];
 
+  const norm = (value: string) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const deletedCashKeys = deletedCategoryMonthKeys(allEntries, (e: any) => (
+    typeof api !== 'undefined' && typeof api.get === 'function'
+      ? (api.get('categories', e.categoryId)?.name || e.category || '')
+      : (e.category || '')
+  ));
   const fallbackValues: Record<string, Record<string, number>> = {
     'Loan EMI': { apr_26: 85000, may_26: 85000, jun_26: 85000, jul_26: 85000, aug_26: 85000, sep_26: 85000, oct_26: 85000, nov_26: 0, dec_26: 0 },
     'Owner Drawings': { apr_26: 0, may_26: 0, jun_26: 0, jul_26: 0, aug_26: 0, sep_26: 300000, oct_26: 0, nov_26: 0, dec_26: 0 }
@@ -3414,15 +3432,24 @@ export function computeCashflowOutflowFinancingAndOwnerRows(entries?: any[], fy 
 
   const childRows: any[] = [];
   for (const catName of ['Loan EMI', 'Owner Drawings']) {
+    const categoryId = catName === 'Loan EMI' ? 'cat_emi' : 'cat_draw';
     const monthlyData: Record<string, any> = {};
     for (const m of monthCols) {
       if (!m.ym) {
         monthlyData[m.col] = null;
       } else {
-        const matching = activeOutflows.filter((e: any) => (e.date || '').slice(0, 7) === m.ym && String(e.category || '').toLowerCase().includes(catName.toLowerCase()));
-        let sum = matching.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+        const matching = activeOutflows.filter((e: any) => {
+          if ((e.date || '').slice(0, 7) !== m.ym) return false;
+          if (String(e.categoryId || '') === categoryId) return true;
+          const entryCategory = typeof api !== 'undefined' && typeof api.get === 'function'
+            ? (api.get('categories', e.categoryId)?.name || e.category || '')
+            : (e.category || '');
+          return norm(entryCategory) === norm(catName) || norm(String(e.category || '')).includes(norm(catName));
+        });
+        const entrySum = matching.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+        const isDeleted = deletedCashKeys.has(norm(catName) + '|' + m.ym);
         const fb = fallbackValues[catName]?.[m.col] || 0;
-        if (sum === 0 || sum < fb) sum = fb;
+        const sum = matching.length > 0 ? entrySum : isDeleted ? 0 : fb;
         monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
       }
     }
@@ -3678,15 +3705,17 @@ PAGES.cashflow = {
             };
             return periods.map((p: any, i: number) => {
               const monthsArr = p.months && p.months.length > 0 ? p.months : (p.from ? [p.from.slice(0, 7)] : []);
-              const sbVal = monthsArr.reduce((sum: number, ym: string) => {
+              return monthsArr.reduce((sum: number, ym: string) => {
+                const monthEntries = te.filter((e: any) =>
+                  String(e.categoryId || '') === String(c.id) && cashflowPeriodOf(e) === ym
+                );
+                if (monthEntries.length > 0) {
+                  return sum + monthEntries.reduce((entrySum: number, e: any) => entrySum + Number(e.amount || 0), 0);
+                }
+                if (deletedCashKeys.has(norm(c.name) + '|' + ym)) return sum;
                 const col = M_COL[ym.slice(5, 7)] || 'apr_26';
-                const v = matchFinancingOwner[col];
-                return sum + (v === null || v === undefined ? 0 : Number(v));
+                return sum + Number(matchFinancingOwner[col] ?? 0);
               }, 0);
-              const liveVal = (agg[c.id] || [])[i] || 0;
-              // A soft-deleted transaction must not resurface from the stored aggregate for this category/month.
-              const resolvedVal = monthsArr.some((ym: string) => deletedCashKeys.has(norm(c.name) + '|' + ym)) ? liveVal : Math.max(liveVal, sbVal);
-              return resolvedVal;
             });
           }
 
@@ -3788,8 +3817,8 @@ PAGES.cashflow = {
               }, 0);
               const liveVal = (agg[c.id] || [])[i] || 0;
               const isDeleted = profMonthsArr.some((ym: string) => deletedCashKeys.has(norm(c.name) + '|' + ym));
-              if (isDeleted) return 0;
-              if (liveVal > 0) return Math.max(liveVal, sbVal);
+              if (isDeleted && liveVal === 0) return 0;
+              if (liveVal > 0) return liveVal;
               // Supabase is the source of truth for Professional & Admin
               const monthKey = p.months && p.months[0] ? M_COL_PROF[p.months[0].slice(5, 7)] : null;
               if (monthKey && matchProfAdmin[monthKey] !== undefined && matchProfAdmin[monthKey] !== null) {
@@ -3825,7 +3854,7 @@ PAGES.cashflow = {
               }, 0);
               const liveVal = (agg[c.id] || [])[i] || 0;
               const isDeleted = trvMonthsArr.some((ym: string) => deletedCashKeys.has(norm(c.name) + '|' + ym));
-              if (isDeleted) return 0;
+              if (isDeleted && liveVal === 0) return 0;
               if (liveVal > 0) return Math.max(liveVal, sbVal);
               // Supabase is the source of truth for Travel
               const monthKey = p.months && p.months[0] ? M_COL_TRV[p.months[0].slice(5, 7)] : null;
