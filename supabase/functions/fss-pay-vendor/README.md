@@ -18,7 +18,7 @@ The browser never receives `FSS_EDGE_ACCESS_TOKEN` or `SUPABASE_SERVICE_ROLE_KEY
 ## Configure and deploy
 
 1. Generate a random token with at least 32 bytes of entropy. Put the same value in the root `.env` as `FSS_EDGE_ACCESS_TOKEN` and in `supabase/.env.pay-vendor.local` as `FSS_EDGE_ACCESS_TOKEN=...`. Set this token as a sensitive Vercel Production environment variable with the same name.
-2. Optionally add `FSS_DEFAULT_CREATED_BY=<Auth user UUID>` to `supabase/.env.pay-vendor.local` to scope rows to a dedicated Supabase Auth user. No app login UI is needed.
+2. Optionally add `FSS_DEFAULT_CREATED_BY=<Auth user UUID>` to `supabase/.env.pay-vendor.local` to scope rows to a dedicated Supabase Auth user. The production app requires Supabase Auth for the allowlisted account before it calls the Vercel API.
 3. Set `FSS_PAY_VENDOR_ALLOWED_EMAILS` in Vercel Production to the comma-separated emails allowed to use Pay a Vendor. The Vercel function checks the verified Supabase Auth email on every request.
 4. Link the Supabase CLI to the project in this workspace, then set the function secrets and deploy:
 
@@ -27,7 +27,7 @@ The browser never receives `FSS_EDGE_ACCESS_TOKEN` or `SUPABASE_SERVICE_ROLE_KEY
    supabase functions deploy fss-pay-vendor
    ```
 
-   The function gateway has `verify_jwt = false` because the local IUOVA app has no Supabase user JWT. The handler still rejects every request without the private access token. Do not remove that check or place the token in browser code.
+   The function gateway has `verify_jwt = false` because it receives only server-to-server requests from the local proxy or the authenticated Vercel API. The handler still rejects every request without the private access token. Do not remove that check or place the token in browser code.
 
 ## Operations
 
