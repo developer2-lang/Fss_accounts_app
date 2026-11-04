@@ -1514,10 +1514,11 @@ const userName = id => (Store.data.users.find(u => u.id === id) || {}).name || '
 const typeChip = t => `<span class="chip ${t}">${TYPE_LABEL[t]}</span>`;
 const amtClass = e => e.type === 'inflow' ? 'in' : e.type === 'outflow' ? 'out' : 'xfer';
 const signedAmt = e => (e.type === 'inflow' ? '+' : e.type === 'outflow' ? '−' : '') + money(e.amount);
-function entryTitle(e) { return e.type === 'transfer' ? 'Transfer' : nameOf('categories', e.categoryId); }
+function entryTitle(e) { return e.type === 'transfer' ? 'Transfer' : e.categoryName || nameOf('categories', e.categoryId); }
 function entryParty(e) {
   if (e.type === 'transfer') return nameOf('accounts', e.accountId) + ' → ' + nameOf('accounts', e.toAccountId);
-  return [nameOf('parties', e.partyId), e.projectId ? api.get('projects', e.projectId).code : ''].filter(Boolean).join(' · ');
+  const project = e.projectCode || (e.projectId && api.get('projects', e.projectId)?.code) || e.projectName;
+  return [e.partyName || nameOf('parties', e.partyId), project].filter(Boolean).join(' · ');
 }
 function sparkline(vals, w = 90, h = 24, color = 'var(--navy-3)') {
   const max = Math.max(...vals, 1); const step = vals.length > 1 ? w / (vals.length - 1) : w;
@@ -1812,15 +1813,117 @@ function dueRowInline(p, days) {
 }
 
 /* ============================ LEDGER ============================ */
+let ledgerLoading = false;
+let ledgerLoadError = '';
+let ledgerRequestId = 0;
+let ledgerRecords: any[] = [];
+
+function ledgerSupabaseFilters() {
+  const L = S.ledger;
+  const [fyFrom, fyTo] = fyRange(S.fy);
+  const selectedCategory = L.categoryId && api.get('categories', L.categoryId);
+  const filteredCategories = api.list('categories').filter(category =>
+    (!L.bucket || bucketOf(category) === L.bucket) && (!L.group || category.group === L.group)
+  );
+  const selectedParty = L.partyId && api.get('parties', L.partyId);
+  const selectedProject = L.projectId && api.get('projects', L.projectId);
+  const selectedDepartment = L.departmentId && api.get('departments', L.departmentId);
+  const selectedAccount = L.accountId && api.get('accounts', L.accountId);
+
+  return {
+    q: L.q,
+    from: L.from || fyFrom,
+    to: L.to || fyTo,
+    type: L.type ? TYPE_LABEL[L.type] : '',
+    category: selectedCategory?.name || '',
+    categories: !selectedCategory && (L.bucket || L.group) ? filteredCategories.map(category => category.name) : [],
+    party: selectedParty?.name || '',
+    project: selectedProject?.name || '',
+    department: selectedDepartment?.name || '',
+    account: selectedAccount?.name || '',
+    mode: L.paymentMode || ''
+  };
+}
+
+async function refreshLedgerFromSupabase() {
+  if (S.page !== 'ledger') return;
+  const requestId = ++ledgerRequestId;
+  const query = typeof window !== 'undefined' && (window as any).__fssQueryTransactions;
+  if (typeof query !== 'function') {
+    ledgerLoading = false;
+    ledgerLoadError = 'Supabase transaction access is not ready.';
+    ledgerRecords = [];
+    refreshLedger();
+    return;
+  }
+
+  ledgerLoading = true;
+  ledgerLoadError = '';
+  refreshLedger();
+  try {
+    const records = await query(ledgerSupabaseFilters());
+    if (requestId !== ledgerRequestId || S.page !== 'ledger') return;
+    ledgerRecords = records;
+  } catch (error) {
+    if (requestId !== ledgerRequestId || S.page !== 'ledger') return;
+    ledgerRecords = [];
+    ledgerLoadError = error instanceof Error ? error.message : 'Could not load transactions from Supabase.';
+  } finally {
+    if (requestId === ledgerRequestId && S.page === 'ledger') {
+      ledgerLoading = false;
+      refreshLedger();
+    }
+  }
+}
+
+function toLedgerEntry(row: any) {
+  const type = String(row.type || '').toLowerCase() === 'inflow' ? 'inflow' : 'outflow';
+  const findByName = (table: string, value: any) => (Store.data[table] || []).find((item: any) =>
+    String(item.name || '').trim().toLowerCase() === String(value || '').trim().toLowerCase()
+  );
+  const category = findByName('categories', row.category);
+  const party = findByName('parties', row.party);
+  const project = findByName('projects', row.project);
+  const department = findByName('departments', row.department);
+  const account = findByName('accounts', row.account);
+  return {
+    id: String(row.id),
+    supabase_id: String(row.id),
+    type,
+    date: row.transaction_date || '',
+    categoryId: category?.id || '',
+    categoryName: row.category || '',
+    partyId: party?.id || '',
+    partyName: row.party || '',
+    projectId: project?.id || '',
+    projectName: row.project || '',
+    projectCode: project?.code || '',
+    departmentId: department?.id || '',
+    departmentName: row.department || '',
+    accountId: account?.id || '',
+    accountName: row.account || '',
+    paymentMode: row.mode || '',
+    description: row.description || '',
+    refNo: row.reference_no || '',
+    notes: row.notes || '',
+    taxable: Number(row.taxable_amount) || 0,
+    gstAmount: Number(row.gst_amount) || 0,
+    tdsAmount: Number(row.tds_amount) || 0,
+    amount: Math.abs(Number(row.net_cash) || 0),
+    netCash: Number(row.net_cash) || 0,
+    attachments: []
+  };
+}
+
 function ledgerFiltered() {
   const L = S.ledger; const [fyF, fyT] = fyRange(S.fy);
   const from = L.from || fyF, to = L.to || fyT; const q = L.q.trim().toLowerCase();
-  let rows = Calc.live().filter(e => e.date >= from && e.date <= to
+  let rows = ledgerRecords.map(toLedgerEntry).filter(e => e.date >= from && e.date <= to
     && (!L.type || e.type === L.type) && (!L.categoryId || e.categoryId === L.categoryId) && (!L.departmentId || e.departmentId === L.departmentId)
     && (!L.partyId || e.partyId === L.partyId) && (!L.projectId || e.projectId === L.projectId)
     && (!L.accountId || e.accountId === L.accountId || e.toAccountId === L.accountId) && (!L.paymentMode || e.paymentMode === L.paymentMode)
     && (!L.bucket || bucketOf(api.get('categories', e.categoryId)) === L.bucket) && (!L.group || (api.get('categories', e.categoryId) || {}).group === L.group));
-  if (q) rows = rows.filter(e => [e.description, e.refNo, e.txnRef, e.notes, nameOf('parties', e.partyId), nameOf('projects', e.projectId), nameOf('categories', e.categoryId), String(e.amount)].join(' ').toLowerCase().includes(q));
+  if (q) rows = rows.filter(e => [e.description, e.refNo, e.notes, e.partyName, e.projectName, e.categoryName, String(e.amount), String(e.taxable)].join(' ').toLowerCase().includes(q));
   const k = L.sort; rows.sort((a, b) => (k === 'amount' ? a.amount - b.amount : a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || '')) * L.dir);
   return { rows, from, to };
 }
@@ -1834,6 +1937,8 @@ PAGES.ledger = {
       <div class="field"><label>From</label><input class="input" type="date" data-lf="from" value="${L.from || fyF}"></div>
       <div class="field"><label>To</label><input class="input" type="date" data-lf="to" value="${L.to || fyT}"></div>
       <button class="btn" data-act="toggle-filters">${icon('list')} Filters${activeCount ? ` <span class="chip navy">${activeCount}</span>` : ''}</button>
+      <button class="btn btn-gold" data-act="add-fss-transaction">+ Add Transaction</button>
+      <button class="btn" data-act="refresh-fss-transactions" title="Refresh from Supabase">${icon('refresh')}</button>
       ${activeCount || L.q || L.bucket || L.group ? '<button class="btn btn-ghost" data-act="clear-filters">Clear</button>' : ''}
       ${L.bucket || L.group ? `<span class="chip gold" style="height:30px;align-self:flex-end">${esc([BUCKET_LABEL[L.bucket], L.group].filter(Boolean).join(' › '))}<button data-act="clear-bucket" title="Remove" style="display:inline-flex;width:14px">${icon('x')}</button></span>` : ''}
       </div>
@@ -1848,6 +1953,7 @@ PAGES.ledger = {
       </div>
       <div class="card" id="ledgerResults">${ledgerResults()}</div>`;
   },
+  after() { void refreshLedgerFromSupabase(); },
 };
 function ledgerResults() {
   const L = S.ledger; const { rows, from, to } = ledgerFiltered();
@@ -1862,24 +1968,28 @@ function ledgerResults() {
     <div><div class="l">Net</div><div class="v">${money(sum(ins, e => e.amount) - sum(outs, e => e.amount), { sign: true })}</div></div>
     <div><div class="l">GST in / out</div><div class="v">${money(sum(ins, e => e.gstAmount))} / ${money(sum(outs, e => e.gstAmount))}</div></div>
     <div><div class="l">TDS in / out</div><div class="v">${money(sum(ins, e => e.tdsAmount))} / ${money(sum(outs, e => e.tdsAmount))}</div></div></div>`;
-  if (!rows.length) return strip + `<div class="empty"><b>No transactions match</b>${fmtDate(from)} – ${fmtDate(to)}. Adjust the filters or add an entry.</div>`;
+  const loadStatus = ledgerLoadError
+    ? `<div class="notice" role="alert" style="margin:12px">${esc(ledgerLoadError)}</div>`
+    : ledgerLoading ? '<div class="notice" style="margin:12px">Loading transactions from Supabase…</div>' : '';
+  if (ledgerLoadError) return strip + loadStatus;
+  if (!rows.length) return strip + loadStatus + (ledgerLoading ? '' : `<div class="empty"><b>No transactions match</b>${fmtDate(from)} – ${fmtDate(to)}. Adjust the filters or add an entry.</div>`);
   const table = `<div class="tbl-wrap ledger-table"><table class="tbl"><thead><tr>
     <th class="sort" data-act="sort" data-k="date">Date${sortI('date')}</th><th>Type</th><th>Category / description</th><th>Party · project</th><th>Dept</th>
-    <th class="num">Taxable</th><th class="num">GST</th><th class="num">TDS</th><th class="num sort" data-act="sort" data-k="amount">Net cash${sortI('amount')}</th><th>Account · mode</th><th></th></tr></thead><tbody>
-    ${slice.map(e => `<tr class="click" data-act="open-entry" data-id="${e.id}">
+    <th class="num">Taxable</th><th class="num">GST</th><th class="num">TDS</th><th class="num sort" data-act="sort" data-k="amount">Net cash${sortI('amount')}</th><th>Account · mode</th><th>Actions</th></tr></thead><tbody>
+    ${slice.map(e => `<tr>
       <td class="nowrap">${fmtDate(e.date)}</td><td>${typeChip(e.type)}</td>
       <td style="max-width:260px"><div class="cell-main">${esc(entryTitle(e))}</div><div class="cell-sub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.description || '')}${e.refNo ? ' · ' + esc(e.refNo) : ''}</div></td>
-      <td style="max-width:220px"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.type === 'transfer' ? entryParty(e) : nameOf('parties', e.partyId) || '—')}</div>${e.projectId ? `<div class="cell-sub">${esc(api.get('projects', e.projectId).code)}</div>` : ''}</td>
-      <td class="nowrap">${esc(nameOf('departments', e.departmentId) || '—')}</td>
+      <td style="max-width:220px"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.type === 'transfer' ? entryParty(e) : e.partyName || nameOf('parties', e.partyId) || '—')}</div>${e.projectName ? `<div class="cell-sub">${esc(e.projectCode || e.projectName)}</div>` : ''}</td>
+      <td class="nowrap">${esc(e.departmentName || nameOf('departments', e.departmentId) || '—')}</td>
       <td class="num">${e.type === 'transfer' ? '' : money(e.taxable)}</td><td class="num muted">${e.gstAmount ? money(e.gstAmount) : ''}</td><td class="num muted">${e.tdsAmount ? money(e.tdsAmount) : ''}</td>
       <td class="num ${amtClass(e)}" style="font-weight:600">${signedAmt(e)}</td>
-      <td class="nowrap"><div>${esc(nameOf('accounts', e.accountId))}</div><div class="cell-sub">${esc(e.paymentMode)}</div></td>
-      <td class="nowrap faint">${e.attachments && e.attachments.length ? `<span title="${e.attachments.length} attachment(s)" style="display:inline-block;width:15px">${icon('clip')}</span>` : ''}${api.isLocked(e.date) ? `<span title="Month locked" style="display:inline-block;width:15px;margin-left:4px">${icon('lock')}</span>` : ''}</td></tr>`).join('')}
+      <td class="nowrap"><div>${esc(e.accountName || nameOf('accounts', e.accountId))}</div><div class="cell-sub">${esc(e.paymentMode)}</div></td>
+      <td class="nowrap"><button class="icon-btn xs" title="Edit transaction" data-act="edit-fss-transaction" data-id="${esc(e.id)}">${icon('edit')}</button> <button class="icon-btn xs" title="Delete transaction" data-act="delete-fss-transaction" data-id="${esc(e.id)}">${icon('trash')}</button></td></tr>`).join('')}
     </tbody></table></div>`;
-  const cards = `<div class="lcards">${slice.map(e => `<div class="lcard" data-act="open-entry" data-id="${e.id}"><div class="type-ic ${e.type}">${icon(e.type === 'inflow' ? 'in' : e.type === 'outflow' ? 'out' : 'transfer')}</div><div class="grow"><div class="t">${esc(entryTitle(e))}</div><div class="s">${esc(entryParty(e))}</div><div class="s">${fmtDate(e.date)} · ${esc(nameOf('departments', e.departmentId) || e.paymentMode)}</div></div><div><div class="amt ${amtClass(e)}">${signedAmt(e)}</div>${e.attachments && e.attachments.length ? `<div class="faint" style="width:14px;margin:4px 0 0 auto">${icon('clip')}</div>` : ''}</div></div>`).join('')}</div>`;
+  const cards = `<div class="lcards">${slice.map(e => `<div class="lcard"><button class="grow" style="border:0;background:none;text-align:left;color:inherit;padding:0" data-act="edit-fss-transaction" data-id="${esc(e.id)}"><div class="t">${esc(entryTitle(e))}</div><div class="s">${esc(entryParty(e))}</div><div class="s">${fmtDate(e.date)} · ${esc(e.departmentName || e.paymentMode)}</div></button><div><div class="amt ${amtClass(e)}">${signedAmt(e)}</div><button class="icon-btn xs" title="Delete transaction" data-act="delete-fss-transaction" data-id="${esc(e.id)}">${icon('trash')}</button></div></div>`).join('')}</div>`;
   const pager = `<div class="pager"><span>Showing ${L.page * per + 1}–${Math.min(rows.length, L.page * per + per)} of ${rows.length}</span><span class="spacer"></span>
     <button class="btn btn-sm" data-act="lpage" data-d="-1" ${L.page ? '' : 'disabled'}>Previous</button><span>Page ${L.page + 1} / ${pages}</span><button class="btn btn-sm" data-act="lpage" data-d="1" ${L.page < pages - 1 ? '' : 'disabled'}>Next</button></div>`;
-  return strip + table + cards + pager;
+  return strip + loadStatus + table + cards + pager;
 }
 function refreshLedger() { const el = $('#ledgerResults'); if (el) el.innerHTML = ledgerResults(); }
 
@@ -4648,7 +4758,7 @@ function openEntryForm({ mode = 'new', entry = null, rec = null, period = null, 
   } else v = { ...base, ...preset };
   if (mode === 'template') Object.assign(v, { name: '', frequency: 'monthly', dayOfMonth: +TODAY.slice(8), startDate: TODAY, endDate: '', variable: false });
   const isTpl = mode.startsWith('template');
-  const F = { mode, v, rec, newFiles: [], removed: [], errs: {}, gstAuto: true, tdsAuto: true, deptAuto: v.departmentAuto !== undefined ? Boolean(v.departmentAuto) : !v.departmentId, repeat: false, rFreq: 'monthly', open: {}, more: false, emailOpen: false, allCats: false, auto: {}, billSet: !!(v.billDate && v.billDate !== v.date) };
+  const F = { mode, v, rec, newFiles: [], removed: [], removedAttachments: [], removedUploadedAttachmentPaths: [], localFileMetas: new Map(), uploadedFormAttachments: new Map(), errs: {}, gstAuto: true, tdsAuto: true, deptAuto: v.departmentAuto !== undefined ? Boolean(v.departmentAuto) : !v.departmentId, repeat: false, rFreq: 'monthly', open: {}, more: false, emailOpen: false, allCats: false, auto: {}, billSet: !!(v.billDate && v.billDate !== v.date) };
   F.kind = kind || ((entry || rec || preset.partyId || preset.piId || preset.type === 'transfer') ? kindOfEntry(v) : null);
   F.sub = F.kind ? subOfEntry(F.kind, v) : null;
   F.period = F.kind === 'tax' ? (/for (\w+ \d{4})/.test(v.description || '') ? null : addMonths(ymOf(v.date || TODAY), -1)) : null;
@@ -4753,8 +4863,16 @@ function openEntryForm({ mode = 'new', entry = null, rec = null, period = null, 
     if (a === 'open') { const k = b.dataset.k; if (k === 'more') F.more = !F.more; else if (k === 'email') F.emailOpen = !F.emailOpen; else if (k === 'gst') { F.showGst = true; if (!+v.gstRate) { v.gstRate = 18; const p = api.get('parties', v.partyId); v.gstType = p && p.gstType !== 'none' ? p.gstType : 'intra'; F.gstAuto = true; } } else if (k === 'tds') { F.showTds = true; if (!+v.tdsRate) { v.tdsRate = F.kind === 'vendor' ? 2 : 10; F.tdsAuto = true; } } else if (k === 'allcats') F.allCats = !F.allCats; else F.open[k] = !F.open[k]; return draw(); }
     if (a === 'use-suggest') { v.taxable = +b.dataset.v; F.gstAuto = F.tdsAuto = true; return draw(); }
     if (a === 'pick-file') return $('#fFiles', body).click();
-    if (a === 'rm-new') { F.newFiles.splice(+b.dataset.i, 1); return draw(); }
-    if (a === 'rm-old') { F.removed.push(b.dataset.id); v.attachments = v.attachments.filter(x => x.id !== b.dataset.id); return draw(); }
+    if (a === 'rm-new') {
+      const file = F.newFiles[+b.dataset.i];
+      const localMeta = file && F.localFileMetas.get(file);
+      if (localMeta) F.removed.push(localMeta.id);
+      const uploaded = file && F.uploadedFormAttachments.get(file);
+      if (uploaded?.storagePath) F.removedUploadedAttachmentPaths.push(uploaded.storagePath);
+      F.newFiles.splice(+b.dataset.i, 1);
+      return draw();
+    }
+    if (a === 'rm-old') { const attachment = (v.attachments || []).find(x => x.id === b.dataset.id); F.removed.push(b.dataset.id); if (attachment) F.removedAttachments.push(attachment); v.attachments = v.attachments.filter(x => x.id !== b.dataset.id); return draw(); }
     if (a === 'new-party') return quickParty(KIND[F.kind].pk || 'other', p => { setField('partyId', p.id); });
     if (a === 'save' || a === 'save-more') {
       b.disabled = true;
@@ -5027,6 +5145,65 @@ function summaryHTML(F) {
       ${F.email ? row('Email', F.email.on ? (F.email.to.length ? F.email.to.length + ' recipient' + (F.email.to.length > 1 ? 's' : '') : 'needs address') : 'Off') : ''}
     </div></div>`;
 }
+const FORM_ATTACHMENT_BUCKET_BY_KIND = {
+  other_in: 'other_income',
+  client: 'client_payment',
+  other_out: 'other_expense',
+  tax: 'tax_saturatory',
+  employee: 'pay an employee attachment',
+  vendor: 'pay a vendor attachment'
+};
+async function prepareSupabaseFormAttachments(F, saved) {
+  const bucket = FORM_ATTACHMENT_BUCKET_BY_KIND[F.kind];
+  if (!bucket) return [];
+  const upload = (window as any).__supabaseUploadFormAttachments;
+  if (F.newFiles.length) {
+    if (typeof upload !== 'function') throw new Error('Supabase attachment storage is not ready.');
+    const pendingFiles = F.newFiles.filter(file => !F.uploadedFormAttachments.has(file));
+    if (pendingFiles.length) {
+      const uploaded = await upload(bucket, pendingFiles);
+      if (!Array.isArray(uploaded) || uploaded.length !== pendingFiles.length) {
+        throw new Error('Supabase did not confirm every attachment upload.');
+      }
+      pendingFiles.forEach((file, index) => F.uploadedFormAttachments.set(file, uploaded[index]));
+    }
+  }
+
+  const removed = new Set(F.removed);
+  const attachments = (F.v.attachments || []).filter(attachment => !removed.has(attachment.id));
+  for (const file of F.newFiles) {
+    const local = F.localFileMetas.get(file);
+    if (!local || removed.has(local.id)) continue;
+    const remote = F.uploadedFormAttachments.get(file);
+    attachments.push({
+      ...local,
+      ...(remote || {})
+    });
+  }
+  saved.attachments = attachments;
+  Store.persist();
+  return attachments;
+}
+function serializeFormAttachments(attachments) {
+  return JSON.stringify((attachments || []).map(attachment => ({
+    id: attachment.id,
+    name: attachment.name,
+    type: attachment.type,
+    size: attachment.size,
+    storagePath: attachment.storagePath || attachment.storage_path || attachment.path || null,
+    url: attachment.url || null
+  })).filter(attachment => attachment.storagePath || attachment.url));
+}
+async function deleteRemovedFormAttachments(F, bucket) {
+  const paths = [...new Set([
+    ...F.removedAttachments.map(attachment => attachment.storagePath || attachment.storage_path || attachment.path),
+    ...F.removedUploadedAttachmentPaths
+  ].filter(Boolean))];
+  if (!paths.length) return;
+  const remove = (window as any).__supabaseDeleteFormAttachments;
+  if (typeof remove !== 'function') throw new Error('Supabase attachment removal is not available.');
+  await remove(bucket, paths);
+}
 async function saveEntryFromForm(F) {
   const v = F.v;
   const input = { ...v };
@@ -5037,19 +5214,16 @@ async function saveEntryFromForm(F) {
   if (Object.keys(errs).length) { const e = new Error(Object.values(errs)[0]); e.fields = errs; throw e; }
   const metas = [];
   for (const fl of F.newFiles) {
-    const id = uid('f'); const meta = { id, name: fl.name, type: fl.type, size: fl.size };
-    await FileStore.put({ ...meta, blob: fl }); metas.push(meta);
+    let meta = F.localFileMetas.get(fl);
+    if (!meta) {
+      meta = { id: uid('f'), name: fl.name, type: fl.type, size: fl.size };
+      await FileStore.put({ ...meta, blob: fl });
+      F.localFileMetas.set(fl, meta);
+    }
+    metas.push(meta);
   }
   input.attachments = [...(v.attachments || []), ...metas];
-  if (F.kind === 'other_in' && typeof window !== 'undefined' && typeof (window as any).__supabaseUploadOtherIncomeAttachments === 'function') {
-    if (!F._otherIncomeAttachmentPaths) {
-      const retainedPaths = (v.attachments || []).map((a: any) => a.storagePath || a.storage_path || a.path).filter(Boolean);
-      const newPaths = await (window as any).__supabaseUploadOtherIncomeAttachments(F.newFiles);
-      F._otherIncomeAttachmentPaths = [...retainedPaths, ...newPaths];
-    }
-    input.otherIncomeAttachmentPaths = F._otherIncomeAttachmentPaths;
-    input.departmentAuto = Boolean(F.deptAuto);
-  }
+  if (F.kind === 'other_in') input.departmentAuto = Boolean(F.deptAuto);
   if (F.kind === 'tax' && F.period && F.sub !== 'adv') input.taxPeriod = F.period;
   input.billDate = input.type === 'outflow' && (+input.gstRate > 0 || +input.tdsRate > 0) && input.partyKind !== 'employee' && F.kind !== 'employee' ? (input.billDate || input.date) : null;
   if (input.type === 'outflow' && +input.tdsRate > 0 && typeof tdsSectionOf === 'function') input.tdsSection = F.kind === 'employee' ? '192' : (input.tdsSection || tdsSectionOf(input) || null);
@@ -5067,6 +5241,7 @@ async function saveEntryFromForm(F) {
     const department = api.get('departments', saved.departmentId) || {};
     const account = api.get('accounts', saved.accountId) || {};
     F._pendingCloudVendorSaved = saved;
+    const vendorAttachments = await prepareSupabaseFormAttachments(F, saved);
     const cloudRow = await (window as any).__supabaseSavePayVendorEntry({
       created_by: null,
       recorded_by: api.me()?.name || null,
@@ -5102,12 +5277,20 @@ async function saveEntryFromForm(F) {
       payment_advice_enabled: Boolean(F.email?.on),
       payment_advice_to: F.email?.on ? (F.email.to || []).join(', ') : null,
       payment_advice_email: F.email?.on ? (F.email.to || []).join(', ') : null,
-      attachments: saved.attachments || [],
+      attachments: vendorAttachments,
       net_cash_paid: Number(saved.amount) || 0
     }, saved.supabase_pay_vendor_id, saved.id);
     if (cloudRow?.id) {
       saved.supabase_pay_vendor_id = cloudRow.id;
       Store.persist();
+    }
+    const removedPaths = [...new Set([...F.removedAttachments
+      .map((attachment: any) => attachment.storagePath || attachment.storage_path || attachment.path)
+      .filter(Boolean), ...F.removedVendorAttachmentPaths])];
+    if (removedPaths.length) {
+      const removeAttachments = (window as any).__supabaseDeletePayVendorAttachments;
+      if (typeof removeAttachments !== 'function') throw new Error('Pay a Vendor attachment removal is not available.');
+      await removeAttachments(removedPaths);
     }
     delete F._pendingCloudVendorSaved;
   }
@@ -5117,7 +5300,7 @@ async function saveEntryFromForm(F) {
     const department = api.get('departments', saved.departmentId) || {};
     const account = api.get('accounts', saved.accountId) || {};
     F._pendingCloudEmployeeSaved = saved;
-    const attachment = (saved.attachments || [])[0] || {};
+    const employeeAttachments = await prepareSupabaseFormAttachments(F, saved);
     const cloudRow = await (window as any).__supabaseSavePayEmployeeEntry({
       employee_id: /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(employee.supabase_id || employee.id) ? (employee.supabase_id || employee.id) : null,
       employee_name: employee.name || 'Unknown employee',
@@ -5132,13 +5315,14 @@ async function saveEntryFromForm(F) {
       project: project?.name || null,
       department: department.name || null,
       notes: saved.notes || null,
-      attachment_url: attachment.url || attachment.path || attachment.storage_path || null,
+      attachment_url: serializeFormAttachments(employeeAttachments),
       repeat_every_cycle: Boolean(F.repeat)
     }, saved.supabase_pay_employee_id);
     if (cloudRow?.id) {
       saved.supabase_pay_employee_id = cloudRow.id;
       Store.persist();
     }
+    await deleteRemovedFormAttachments(F, FORM_ATTACHMENT_BUCKET_BY_KIND.employee);
     delete F._pendingCloudEmployeeSaved;
   }
   if (F.kind === 'tax' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveTaxStatutoryEntry === 'function') {
@@ -5146,9 +5330,9 @@ async function saveEntryFromForm(F) {
     const category = api.get('categories', saved.categoryId) || {};
     const department = api.get('departments', saved.departmentId) || {};
     const account = api.get('accounts', saved.accountId) || {};
-    const attachment = (saved.attachments || [])[0] || {};
     const taxMonth = F.sub === 'adv' ? saved.date : `${F.period || ymOf(saved.date)}-01`;
     F._pendingCloudTaxStatutorySaved = saved;
+    const taxAttachments = await prepareSupabaseFormAttachments(F, saved);
     const cloudRow = await (window as any).__supabaseSaveTaxStatutoryEntry({
       paying_type: TAX_SUBS[F.sub]?.[0] || 'GST',
       tax_month: taxMonth,
@@ -5157,7 +5341,7 @@ async function saveEntryFromForm(F) {
       category: category.name || null,
       department: department.name || null,
       challan_no: saved.refNo || null,
-      attachment_url: attachment.url || attachment.path || attachment.storage_path || null,
+      attachment_url: serializeFormAttachments(taxAttachments),
       payment_date: saved.date,
       payment_mode: saved.paymentMode || null,
       paid_from: account.name || '',
@@ -5170,6 +5354,7 @@ async function saveEntryFromForm(F) {
       saved.supabase_tax_statutory_id = cloudRow.id;
       Store.persist();
     }
+    await deleteRemovedFormAttachments(F, FORM_ATTACHMENT_BUCKET_BY_KIND.tax);
     delete F._pendingCloudTaxStatutorySaved;
   }
   if (F.kind === 'other_out' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveOtherExpenseEntry === 'function') {
@@ -5178,8 +5363,8 @@ async function saveEntryFromForm(F) {
     const department = api.get('departments', saved.departmentId) || {};
     const project = saved.projectId ? api.get('projects', saved.projectId) : null;
     const account = api.get('accounts', saved.accountId) || {};
-    const attachment = (saved.attachments || [])[0] || {};
     F._pendingCloudOtherExpenseSaved = saved;
+    const expenseAttachments = await prepareSupabaseFormAttachments(F, saved);
     const cloudRow = await (window as any).__supabaseSaveOtherExpenseEntry({
       expense_category: category.name || '',
       paid_to: party.name || null,
@@ -5193,7 +5378,7 @@ async function saveEntryFromForm(F) {
       payment_mode: saved.paymentMode || null,
       paid_from: account.name || '',
       utr_cheque_ref: saved.txnRef || null,
-      attachment_url: attachment.url || attachment.path || attachment.storage_path || null,
+      attachment_url: serializeFormAttachments(expenseAttachments),
       description: saved.description || null,
       reference_no: saved.refNo || null,
       project: project?.name || null,
@@ -5206,6 +5391,7 @@ async function saveEntryFromForm(F) {
       saved.supabase_other_expense_id = cloudRow.id;
       Store.persist();
     }
+    await deleteRemovedFormAttachments(F, FORM_ATTACHMENT_BUCKET_BY_KIND.other_out);
     delete F._pendingCloudOtherExpenseSaved;
   }
   if (F.kind === 'client' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveClientPaymentEntry === 'function') {
@@ -5214,8 +5400,8 @@ async function saveEntryFromForm(F) {
     const department = api.get('departments', saved.departmentId) || {};
     const project = saved.projectId ? api.get('projects', saved.projectId) : null;
     const account = api.get('accounts', saved.accountId) || {};
-    const attachment = (saved.attachments || [])[0] || {};
     F._pendingCloudClientPaymentSaved = saved;
+    const clientPaymentAttachments = await prepareSupabaseFormAttachments(F, saved);
     const cloudRow = await (window as any).__supabaseSaveClientPaymentEntry({
       client_name: client.name || '',
       category: category.name || null,
@@ -5231,7 +5417,7 @@ async function saveEntryFromForm(F) {
       payment_mode: saved.paymentMode || null,
       received_into: account.name || '',
       utr_cheque_ref: saved.txnRef || null,
-      attachment_url: attachment.url || attachment.path || attachment.storage_path || null,
+      attachment_url: serializeFormAttachments(clientPaymentAttachments),
       description: saved.description || null,
       gst_type: saved.gstType || null,
       notes: saved.notes || null,
@@ -5244,6 +5430,7 @@ async function saveEntryFromForm(F) {
       saved.supabase_client_payment_id = cloudRow.id;
       Store.persist();
     }
+    await deleteRemovedFormAttachments(F, FORM_ATTACHMENT_BUCKET_BY_KIND.client);
     delete F._pendingCloudClientPaymentSaved;
   }
   if (F.kind === 'other_in' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveOtherIncomeEntry === 'function') {
@@ -5252,8 +5439,12 @@ async function saveEntryFromForm(F) {
     const department = api.get('departments', saved.departmentId) || {};
     const project = saved.projectId ? api.get('projects', saved.projectId) : null;
     const account = api.get('accounts', saved.accountId) || {};
-    const attachmentPaths = saved.otherIncomeAttachmentPaths || [];
     F._pendingCloudOtherIncomeSaved = saved;
+    const otherIncomeAttachments = await prepareSupabaseFormAttachments(F, saved);
+    const attachmentPaths = otherIncomeAttachments
+      .map((attachment: any) => attachment.storagePath || attachment.storage_path || attachment.path)
+      .filter(Boolean);
+    saved.otherIncomeAttachmentPaths = attachmentPaths;
     const cloudRow = await (window as any).__supabaseSaveOtherIncomeEntry({
       category: category.name || '',
       received_from: party.name || null,
@@ -5288,6 +5479,7 @@ async function saveEntryFromForm(F) {
         await (window as any).__supabaseDeleteOtherIncomeAttachments(removedPaths);
       }
     }
+    await deleteRemovedFormAttachments(F, FORM_ATTACHMENT_BUCKET_BY_KIND.other_in);
     delete F._pendingCloudOtherIncomeSaved;
   }
   if (tiPI && !tiPI.taxInvoiceDate) { try { await issueTaxInvoice(tiPI.id, saved.date, saved.refNo); } catch (err) { toast('Saved, but the tax invoice was not issued: ' + err.message, 'error'); } }
@@ -5983,6 +6175,41 @@ PAGES.settings = {
 
 /* ============================ actions ============================ */
 const ACT = {
+  'add-fss-transaction': () => {
+    if (typeof window !== 'undefined' && typeof (window as any).__fssOpenTransactionModal === 'function') {
+      (window as any).__fssOpenTransactionModal(null);
+    } else {
+      toast('Transaction form is not ready yet.', 'error');
+    }
+  },
+  'refresh-fss-transactions': () => { void refreshLedgerFromSupabase(); },
+  'edit-fss-transaction': el => {
+    const transaction = ledgerRecords.find((row: any) => String(row.id) === String(el.dataset.id));
+    if (!transaction) return toast('Transaction is no longer available. Refresh and try again.', 'error');
+    if (typeof window !== 'undefined' && typeof (window as any).__fssOpenTransactionModal === 'function') {
+      (window as any).__fssOpenTransactionModal(transaction);
+    }
+  },
+  'delete-fss-transaction': async el => {
+    const transaction = ledgerRecords.find((row: any) => String(row.id) === String(el.dataset.id));
+    if (!transaction) return toast('Transaction is no longer available. Refresh and try again.', 'error');
+    const amount = Math.abs(Number(transaction.net_cash) || 0);
+    if (!await confirmBox({
+      title: 'Delete this transaction?',
+      body: `<b>${esc(transaction.description || transaction.category || 'Transaction')}</b> · ${money(amount)} on ${fmtDate(transaction.transaction_date)}. This will permanently delete only this Supabase record.`,
+      ok: 'Delete transaction',
+      danger: true
+    })) return;
+    const remove = typeof window !== 'undefined' && (window as any).__fssDeleteTransaction;
+    if (typeof remove !== 'function') return toast('Transaction database access is not ready.', 'error');
+    try {
+      await remove(String(transaction.id));
+      toast('Transaction deleted from Supabase');
+      await refreshLedgerFromSupabase();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Could not delete the transaction.', 'error');
+    }
+  },
   'open-entry': el => openEntry(el.dataset.id),
   'close-drawer': () => closeDrawer(),
   'view-file': el => viewFile(el.dataset.id),
@@ -6381,7 +6608,7 @@ function bindGlobal() {
   });
   document.addEventListener('change', ev => {
     const t = ev.target;
-    if (t.dataset.lf) { S.ledger[t.dataset.lf] = t.value; S.ledger.page = 0; if (S.page === 'ledger') { const fresh = PAGES.ledger.render(); refreshLedger(); const btn = $('[data-act=toggle-filters]'); if (btn) { const tmp = document.createElement('div'); tmp.innerHTML = fresh; const nb = $('[data-act=toggle-filters]', tmp); btn.innerHTML = nb.innerHTML; } } return; }
+    if (t.dataset.lf) { S.ledger[t.dataset.lf] = t.value; S.ledger.page = 0; if (S.page === 'ledger') { const fresh = PAGES.ledger.render(); refreshLedgerFromSupabase(); const btn = $('[data-act=toggle-filters]'); if (btn) { const tmp = document.createElement('div'); tmp.innerHTML = fresh; const nb = $('[data-act=toggle-filters]', tmp); btn.innerHTML = nb.innerHTML; } } return; }
     if (t.dataset.af) { S.audit[t.dataset.af] = t.value; S.audit.page = 0; render(); return; }
     if (t.dataset.of) { S.ord[t.dataset.of] = t.value; render({ keepScroll: true }); return; }
     if (t.dataset.pf) { S.pi[t.dataset.pf] = t.value; render({ keepScroll: true }); return; }
@@ -6405,7 +6632,7 @@ function bindGlobal() {
     if (!t.dataset.inp) return;
     clearTimeout(deb);
     deb = setTimeout(() => {
-      if (t.dataset.inp === 'lq') { S.ledger.q = t.value; S.ledger.page = 0; refreshLedger(); }
+      if (t.dataset.inp === 'lq') { S.ledger.q = t.value; S.ledger.page = 0; refreshLedgerFromSupabase(); }
       if (t.dataset.inp === 'obq') { S.outbox.q = t.value; const pos = t.selectionStart; render({ keepScroll: true }); const n = $('[data-inp=obq]'); n.focus(); n.setSelectionRange(pos, pos); }
       if (t.dataset.inp === 'oq' || t.dataset.inp === 'pq') { (t.dataset.inp === 'oq' ? S.ord : S.pi).q = t.value; const pos = t.selectionStart; render({ keepScroll: true }); const n = $(`[data-inp=${t.dataset.inp}]`); n.focus(); n.setSelectionRange(pos, pos); }
       if (t.dataset.inp === 'aq') { S.audit.q = t.value; S.audit.page = 0; const pos = t.selectionStart; render(); const n = $('[data-inp=aq]'); n.focus(); n.setSelectionRange(pos, pos); }
@@ -9508,6 +9735,7 @@ export {
   monthLabel,
   fyOf,
   ROLES,
+  PAYMENT_MODES,
   ACT,
   IC,
   getSeedProjectMaster,
@@ -9532,6 +9760,7 @@ if (typeof window !== 'undefined') {
     go,
     route,
     render,
+    refreshLedgerFromSupabase,
     boot,
     toast,
     confirmBox

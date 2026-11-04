@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { boot, go, route, render, S, api, Store, FileStore, getCashflowSummaryUiRows, computeCashflowInflowRows, computeCashflowPeopleRows, computeCashflowOutflowProjectCostRows, computeCashflowOutflowCapexRows, computeCashflowOutflowFinancingAndOwnerRows, computeCashflowOutflowOfficeFixedRows, computeCashflowOutflowOfficeVariableRows, computeCashflowOutflowTravelRows, computeCashflowOutflowProfessionalAdminRows, computeCashflowOutflowTaxStatutoryRows } from './lib/coreEngine';
-import { SupabaseService, isSupabaseConfigured, STATE_NAME_TO_CODE, STATE_CODE_TO_NAME } from './lib/supabase';
+import { boot, go, route, render, S, api, Store, FileStore, PAYMENT_MODES, getCashflowSummaryUiRows, computeCashflowInflowRows, computeCashflowPeopleRows, computeCashflowOutflowProjectCostRows, computeCashflowOutflowCapexRows, computeCashflowOutflowFinancingAndOwnerRows, computeCashflowOutflowOfficeFixedRows, computeCashflowOutflowOfficeVariableRows, computeCashflowOutflowTravelRows, computeCashflowOutflowProfessionalAdminRows, computeCashflowOutflowTaxStatutoryRows } from './lib/coreEngine';
+import { FssTransactionInput, FormAttachmentBucket, SupabaseService, isSupabaseConfigured, STATE_NAME_TO_CODE, STATE_CODE_TO_NAME } from './lib/supabase';
 import { AddClientModal } from './components/AddClientModal';
 import { AddVendorModal } from './components/AddVendorModal';
 import { AddEmployeeModal } from './components/AddEmployeeModal';
@@ -9,6 +9,7 @@ import { AddProjectModal } from './components/AddProjectModal';
 import { AddDepartmentModal } from './components/AddDepartmentModal';
 import { AddBankAccountModal } from './components/AddBankAccountModal';
 import { AddCategoryModal } from './components/AddCategoryModal';
+import { SupabaseTransactionModal } from './components/SupabaseTransactionModal';
 import './styles/index.css';
 
 function replaceMasterRows(
@@ -32,6 +33,50 @@ function replaceMasterRows(
   return mappedRows
     .sort((a, b) => a._localOrder - b._localOrder)
     .map(({ _localOrder, ...row }) => row);
+}
+
+function formAttachmentsFromValue(value: any, bucket: string, idPrefix: string): any[] {
+  let items: any[] = [];
+  if (Array.isArray(value)) {
+    items = value;
+  } else if (typeof value === 'string' && value) {
+    try {
+      const parsed = JSON.parse(value);
+      items = Array.isArray(parsed) ? parsed : [value];
+    } catch {
+      items = [value];
+    }
+  }
+  return items.map((item, index) => {
+    const raw = typeof item === 'string' ? item : '';
+    const url = /^https?:\/\//i.test(raw) ? raw : item?.url || '';
+    let storagePath = typeof item === 'object'
+      ? item.storagePath || item.storage_path || item.path || ''
+      : '';
+    if (!storagePath && raw && !url) storagePath = raw;
+    if (!storagePath && url) {
+      try {
+        const decodedPath = decodeURIComponent(new URL(url).pathname);
+        const marker = `/object/public/${bucket}/`;
+        const markerIndex = decodedPath.indexOf(marker);
+        if (markerIndex >= 0) storagePath = decodedPath.slice(markerIndex + marker.length);
+      } catch {
+        if (!/^https?:\/\//i.test(url)) storagePath = url;
+      }
+    }
+    const publicUrl = url || (storagePath
+      ? SupabaseService.getFormAttachmentPublicUrl(bucket as FormAttachmentBucket, storagePath)
+      : '');
+    const name = item?.name || decodeURIComponent((storagePath || publicUrl).split('/').pop() || 'Attachment');
+    return {
+      id: item?.id || `${idPrefix}_${index}`,
+      name,
+      type: item?.type || '',
+      size: Number(item?.size) || 0,
+      ...(storagePath ? { storagePath } : {}),
+      ...(publicUrl ? { url: publicUrl } : {})
+    };
+  });
 }
 
 export interface CloudStatus {
@@ -742,6 +787,8 @@ export const App: React.FC = () => {
   const [showAddDepartmentModal, setShowAddDepartmentModal] = useState<boolean>(false);
   const [showAddBankAccountModal, setShowAddBankAccountModal] = useState<boolean>(false);
   const [showAddCategoryModal, setShowAddCategoryModal] = useState<boolean>(false);
+  const [isFssTransactionModalOpen, setIsFssTransactionModalOpen] = useState<boolean>(false);
+  const [fssTransactionToEdit, setFssTransactionToEdit] = useState<any | null>(null);
   const cashflowSummarySyncQueue = useRef<Promise<any[]>>(Promise.resolve([]));
   const isHydratingSupabase = useRef(false);
 
@@ -1440,7 +1487,7 @@ export const App: React.FC = () => {
               accountId: account?.id || '',
               txnRef: row.utr_cheque_ref || '',
               notes: row.notes || '',
-              attachments: row.attachment_url ? [{ id: `tax_attachment_${row.id}`, name: String(row.attachment_url).split('/').pop() || 'Attachment', type: '', size: 0, url: row.attachment_url }] : [],
+              attachments: formAttachmentsFromValue(row.attachment_url, 'tax_saturatory', `tax_attachment_${row.id}`),
               taxPeriod: row.tax_month ? String(row.tax_month).slice(0, 7) : undefined,
               supabase_tax_statutory_id: row.id,
               deleted: false,
@@ -1475,7 +1522,7 @@ export const App: React.FC = () => {
               gstType: row.gst_type || 'none', gstRate: Number(row.gst_rate) || 0, gstAmount: Number(row.gst_amount) || 0,
               itc: row.input_gst_claimable !== false, tdsRate: 0, tdsAmount: Number(row.tds_amount) || 0, amount: Number(row.net_cash_paid) || 0,
               paymentMode: row.payment_mode || '', accountId: account?.id || '', txnRef: row.utr_cheque_ref || '', notes: row.notes || '',
-              attachments: row.attachment_url ? [{ id: `expense_attachment_${row.id}`, name: String(row.attachment_url).split('/').pop() || 'Attachment', type: '', size: 0, url: row.attachment_url }] : [],
+              attachments: formAttachmentsFromValue(row.attachment_url, 'other_expense', `expense_attachment_${row.id}`),
               supabase_other_expense_id: row.id, deleted: false, createdAt: row.created_at || new Date().toISOString(), updatedAt: row.updated_at || row.created_at || new Date().toISOString()
             };
             const existingIdx = Store.data.entries.findIndex((e: any) => e.supabase_other_expense_id === row.id || (e.type === 'outflow' && e.categoryId === entryRecord.categoryId && e.date === entryRecord.date && e.refNo === entryRecord.refNo && !e.supabase_tax_statutory_id));
@@ -1500,7 +1547,7 @@ export const App: React.FC = () => {
               gstType: row.gst_type || 'none', gstRate: Number(row.gst_rate) || 0, gstAmount: Number(row.gst_amount) || 0, itc: false,
               tdsRate: Number(row.tds_rate) || 0, tdsAmount: Number(row.tds_amount) || 0, amount: Number(row.net_cash_received) || 0,
               paymentMode: row.payment_mode || '', accountId: account?.id || '', txnRef: row.utr_cheque_ref || '', notes: row.notes || '',
-              attachments: row.attachment_url ? [{ id: `client_attachment_${row.id}`, name: String(row.attachment_url).split('/').pop() || 'Attachment', type: '', size: 0, url: row.attachment_url }] : [],
+              attachments: formAttachmentsFromValue(row.attachment_url, 'client_payment', `client_attachment_${row.id}`),
               supabase_client_payment_id: row.id, deleted: false, createdAt: row.created_at || new Date().toISOString(), updatedAt: row.updated_at || row.created_at || new Date().toISOString()
             };
             const existingIdx = Store.data.entries.findIndex((e: any) => e.supabase_client_payment_id === row.id || (e.type === 'inflow' && e.partyId === entryRecord.partyId && e.date === entryRecord.date && e.txnRef === entryRecord.txnRef && !e.supabase_other_expense_id));
@@ -1521,6 +1568,7 @@ export const App: React.FC = () => {
             let gstDetails: any = {};
             try { gstDetails = row.gst_details ? JSON.parse(row.gst_details) : {}; } catch { gstDetails = {}; }
             const attachmentPaths = Array.isArray(row.attachment_paths) ? row.attachment_paths : [];
+            const otherIncomeAttachments = formAttachmentsFromValue(attachmentPaths, 'other_income', `other_income_attachment_${row.id}`);
             const entryRecord: any = {
               id: `other_income_${row.id}`, type: 'inflow', date: row.payment_date,
               categoryId: category?.id || '', departmentId: department?.id || '', partyKind: party?.kind || 'other', partyId: party?.id || '', projectId: project?.id || '',
@@ -1528,7 +1576,7 @@ export const App: React.FC = () => {
               gstType: gstDetails.type || 'none', gstRate: Number(gstDetails.rate) || 0, gstAmount: Number(gstDetails.amount) || 0, itc: false,
               tdsRate: Number(row.tds_percent) || 0, tdsAmount: Number(row.tds_amount) || 0, amount: Number(row.net_cash_received) || 0,
               paymentMode: row.payment_mode || '', accountId: account?.id || '', txnRef: row.utr_reference || '', notes: row.notes || '',
-              attachments: attachmentPaths.map((path: string, index: number) => ({ id: `other_income_attachment_${row.id}_${index}`, name: String(path).split('/').pop() || 'Attachment', type: '', size: 0, storagePath: path })),
+              attachments: otherIncomeAttachments,
               otherIncomeAttachmentPaths: attachmentPaths, departmentAuto: row.department_auto !== false, financialYear: row.financial_year || '', supabase_other_income_id: row.id,
               deleted: false, createdAt: row.created_at || new Date().toISOString(), updatedAt: row.updated_at || row.created_at || new Date().toISOString()
             };
@@ -2119,9 +2167,22 @@ export const App: React.FC = () => {
         setCloudStatus(prev => ({ ...prev, lastSynced: new Date().toLocaleTimeString(), error: null }));
         return row;
       };
+      (window as any).__fssQueryTransactions = (filters: any) => SupabaseService.queryFssTransactions(filters);
+      (window as any).__fssDeleteTransaction = (id: string) => SupabaseService.deleteFssTransaction(id);
+      (window as any).__fssOpenTransactionModal = (transaction: any | null) => {
+        setFssTransactionToEdit(transaction);
+        setIsFssTransactionModalOpen(true);
+      };
+      if (S.page === 'ledger') {
+        void (window as any).IuovaCore?.refreshLedgerFromSupabase?.();
+      }
       (window as any).__supabaseLoadPayVendorEntries = (id?: string) => SupabaseService.loadPayVendorEntries(id);
       (window as any).__supabaseUpdatePayVendorEntry = (id: string, entry: any) => SupabaseService.updatePayVendorEntry(id, entry);
       (window as any).__supabaseDeletePayVendorEntry = (id: string) => SupabaseService.deletePayVendorEntry(id);
+      (window as any).__supabaseUploadPayVendorAttachments = (files: File[]) => SupabaseService.uploadPayVendorAttachments(files);
+      (window as any).__supabaseDeletePayVendorAttachments = (paths: string[]) => SupabaseService.deletePayVendorAttachments(paths);
+      (window as any).__supabaseUploadFormAttachments = (bucket: string, files: File[]) => SupabaseService.uploadFormAttachments(bucket, files);
+      (window as any).__supabaseDeleteFormAttachments = (bucket: string, paths: string[]) => SupabaseService.deleteFormAttachments(bucket, paths);
 
       (window as any).__supabaseSavePayEmployeeEntry = async (entry: any, rowId?: string) => {
         if (!isSupabaseConfigured) throw new Error('Supabase is not configured; employee payment was not saved to the cloud.');
@@ -3318,9 +3379,16 @@ export const App: React.FC = () => {
       delete (window as any).__supabaseSaveVendor;
       delete (window as any).__supabaseDeleteVendor;
       delete (window as any).__supabaseSavePayVendorEntry;
+      delete (window as any).__fssQueryTransactions;
+      delete (window as any).__fssDeleteTransaction;
+      delete (window as any).__fssOpenTransactionModal;
       delete (window as any).__supabaseLoadPayVendorEntries;
       delete (window as any).__supabaseUpdatePayVendorEntry;
       delete (window as any).__supabaseDeletePayVendorEntry;
+      delete (window as any).__supabaseUploadPayVendorAttachments;
+      delete (window as any).__supabaseDeletePayVendorAttachments;
+      delete (window as any).__supabaseUploadFormAttachments;
+      delete (window as any).__supabaseDeleteFormAttachments;
       delete (window as any).__supabaseSavePayEmployeeEntry;
       delete (window as any).__supabaseSaveTaxStatutoryEntry;
       delete (window as any).__supabaseLoadTaxStatutoryEntries;
@@ -3603,6 +3671,30 @@ export const App: React.FC = () => {
         onClose={() => setShowAddCategoryModal(false)}
         onSuccess={handleCategoryAdded}
       />
+      {isFssTransactionModalOpen && (
+        <SupabaseTransactionModal
+          transaction={fssTransactionToEdit}
+          categories={Store.data?.categories || []}
+          parties={Store.data?.parties || []}
+          projects={Store.data?.projects || []}
+          departments={Store.data?.departments || []}
+          accounts={Store.data?.accounts || []}
+          paymentModes={PAYMENT_MODES}
+          onClose={() => {
+            setIsFssTransactionModalOpen(false);
+            setFssTransactionToEdit(null);
+          }}
+          onSave={async (id: string | null, input: FssTransactionInput) => {
+            if (id) await SupabaseService.updateFssTransaction(id, input);
+            else await SupabaseService.createFssTransaction(input);
+            setIsFssTransactionModalOpen(false);
+            setFssTransactionToEdit(null);
+            setCloudStatus(prev => ({ ...prev, lastSynced: new Date().toLocaleTimeString(), error: null }));
+            (window as any).IuovaCore?.toast(id ? 'Transaction updated in Supabase' : 'Transaction saved to Supabase');
+            await (window as any).IuovaCore?.refreshLedgerFromSupabase?.();
+          }}
+        />
+      )}
     </>
   );
 };

@@ -18,6 +18,52 @@ export interface SupabaseSyncStatus {
   error?: string | null;
 }
 
+export interface FssTransactionFilters {
+  q?: string;
+  from?: string;
+  to?: string;
+  type?: string;
+  category?: string;
+  categories?: string[];
+  party?: string;
+  project?: string;
+  department?: string;
+  account?: string;
+  mode?: string;
+}
+
+export interface FssTransactionInput {
+  transaction_date: string;
+  type: 'Inflow' | 'Outflow';
+  category: string;
+  description: string;
+  reference_no: string | null;
+  party: string | null;
+  project: string | null;
+  department: string | null;
+  taxable_amount: number;
+  gst_amount: number;
+  tds_amount: number;
+  account: string;
+  mode: string;
+  notes: string | null;
+}
+
+export type FormAttachmentBucket =
+  | 'other_income'
+  | 'client_payment'
+  | 'other_expense'
+  | 'tax_saturatory'
+  | 'pay an employee attachment'
+  | 'pay a vendor attachment';
+
+const FSS_TRANSACTION_COLUMNS = [
+  'id', 'transaction_date', 'type', 'category', 'description', 'reference_no',
+  'party', 'project', 'department', 'taxable_amount', 'gst_amount', 'tds_amount',
+  'net_cash', 'account', 'mode', 'notes', 'created_at', 'updated_at'
+].join(',');
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export const STATE_CODE_TO_NAME: Record<string, string> = {
   '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
   '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi', '08': 'Rajasthan',
@@ -429,6 +475,127 @@ function recomputeProfessionalAdminFyAndShares(rows: any[]): any[] {
 }
 
 export const SupabaseService = {
+  async queryFssTransactions(filters: FssTransactionFilters = {}): Promise<any[]> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the existing Supabase URL and anon key.');
+
+    const records: any[] = [];
+    const batchSize = 1000;
+    let offset = 0;
+    while (true) {
+      let query = supabase
+        .from('fss_transactions')
+        .select(FSS_TRANSACTION_COLUMNS)
+        .order('transaction_date', { ascending: false })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + batchSize - 1);
+
+      if (filters.from) query = query.gte('transaction_date', filters.from);
+      if (filters.to) query = query.lte('transaction_date', filters.to);
+      if (filters.type) query = query.ilike('type', filters.type);
+      if (filters.category) query = query.eq('category', filters.category);
+      else if (filters.categories?.length) query = query.in('category', filters.categories);
+      if (filters.party) query = query.eq('party', filters.party);
+      if (filters.project) query = query.eq('project', filters.project);
+      if (filters.department) query = query.eq('department', filters.department);
+      if (filters.account) query = query.eq('account', filters.account);
+      if (filters.mode) query = query.eq('mode', filters.mode);
+
+      const search = String(filters.q || '').trim();
+      if (search) {
+        const safeSearch = search.replace(/[^A-Za-z0-9\s@.-]/g, ' ').replace(/\s+/g, ' ').trim();
+        const searchTerms = safeSearch
+          ? ['description', 'reference_no', 'party'].map(column => `${column}.ilike.%${safeSearch}%`)
+          : [];
+        const amount = Number(search.replace(/[,₹\s]/g, ''));
+        if (Number.isFinite(amount)) {
+          searchTerms.push(`net_cash.eq.${amount}`, `net_cash.eq.${-amount}`, `taxable_amount.eq.${amount}`);
+        }
+        if (!searchTerms.length) return [];
+        query = query.or(searchTerms.join(','));
+      }
+
+      const { data, error } = await query;
+      if (error) throw new Error(`Could not load transactions from Supabase: ${error.message}`);
+      if (!data?.length) break;
+      records.push(...data);
+      if (data.length < batchSize) break;
+      offset += batchSize;
+    }
+
+    return records;
+  },
+
+  async createFssTransaction(input: FssTransactionInput): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the existing Supabase URL and anon key.');
+    const payload = {
+      transaction_date: input.transaction_date,
+      type: input.type,
+      category: input.category,
+      description: input.description,
+      reference_no: input.reference_no,
+      party: input.party,
+      project: input.project,
+      department: input.department,
+      taxable_amount: input.taxable_amount,
+      gst_amount: input.gst_amount,
+      tds_amount: input.tds_amount,
+      account: input.account,
+      mode: input.mode,
+      notes: input.notes
+    };
+    const { data, error } = await supabase
+      .from('fss_transactions')
+      .insert(payload)
+      .select(FSS_TRANSACTION_COLUMNS)
+      .single();
+    if (error) throw new Error(`Could not save transaction to Supabase: ${error.message}`);
+    return data;
+  },
+
+  async updateFssTransaction(id: string, input: FssTransactionInput): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the existing Supabase URL and anon key.');
+    if (!UUID_PATTERN.test(id)) throw new Error('Transaction ID is invalid.');
+    const payload = {
+      transaction_date: input.transaction_date,
+      type: input.type,
+      category: input.category,
+      description: input.description,
+      reference_no: input.reference_no,
+      party: input.party,
+      project: input.project,
+      department: input.department,
+      taxable_amount: input.taxable_amount,
+      gst_amount: input.gst_amount,
+      tds_amount: input.tds_amount,
+      account: input.account,
+      mode: input.mode,
+      notes: input.notes,
+      updated_at: new Date().toISOString()
+    };
+    const { data, error } = await supabase
+      .from('fss_transactions')
+      .update(payload)
+      .eq('id', id)
+      .select(FSS_TRANSACTION_COLUMNS)
+      .maybeSingle();
+    if (error) throw new Error(`Could not update transaction in Supabase: ${error.message}`);
+    if (!data) throw new Error('Transaction was not found in Supabase.');
+    return data;
+  },
+
+  async deleteFssTransaction(id: string): Promise<void> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the existing Supabase URL and anon key.');
+    if (!UUID_PATTERN.test(id)) throw new Error('Transaction ID is invalid.');
+    const { data, error } = await supabase
+      .from('fss_transactions')
+      .delete()
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new Error(`Could not delete transaction from Supabase: ${error.message}`);
+    if (!data) throw new Error('Transaction was not found in Supabase.');
+  },
+
   async callPayVendorEdgeFunction(body: Record<string, any>): Promise<any> {
     if (!isSupabaseConfigured) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
     let response: Response;
@@ -439,10 +606,10 @@ export const SupabaseService = {
         body: JSON.stringify(body)
       });
     } catch {
-      throw new Error('Could not reach the protected Pay a Vendor server. Check your connection and access to this app.');
+      throw new Error('Could not reach the protected Supabase form service. Check your connection and access to this app.');
     }
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || `Pay a Vendor request failed (${response.status}).`);
+    if (!response.ok) throw new Error(result.error || `Supabase form request failed (${response.status}).`);
     return result.data;
   },
   async savePayVendorEntry(payload: Record<string, any>, rowId?: string, idempotencyKey?: string): Promise<any> {
@@ -462,6 +629,65 @@ export const SupabaseService = {
   },
   async deletePayVendorEntry(id: string): Promise<void> {
     await this.callPayVendorEdgeFunction({ operation: 'delete', id });
+  },
+  async uploadFormAttachments(
+    bucket: FormAttachmentBucket,
+    files: File[]
+  ): Promise<Array<{ name: string; type: string; size: number; storagePath: string; url: string }>> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const uploaded: Array<{ name: string; type: string; size: number; storagePath: string; url: string }> = [];
+    try {
+      for (const file of files || []) {
+        const signed = await this.callPayVendorEdgeFunction({
+          operation: 'create_form_attachment_upload',
+          bucket,
+          name: file.name,
+          content_type: file.type || 'application/octet-stream'
+        });
+        if (!signed?.path || !signed?.token || !signed?.url) {
+          throw new Error('The Supabase attachment upload link was incomplete.');
+        }
+        const { error } = await supabase.storage
+          .from(bucket)
+          .uploadToSignedUrl(signed.path, signed.token, file, {
+            contentType: file.type || 'application/octet-stream'
+          });
+        if (error) throw new Error(`Could not upload "${file.name}" to Supabase Storage: ${error.message}`);
+        uploaded.push({
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          storagePath: signed.path,
+          url: signed.url
+        });
+      }
+      return uploaded;
+    } catch (error) {
+      if (uploaded.length) {
+        try {
+          await this.deleteFormAttachments(bucket, uploaded.map(file => file.storagePath));
+        } catch (cleanupError) {
+          const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : 'Storage cleanup failed.';
+          throw new Error(`${error instanceof Error ? error.message : 'Attachment upload failed.'} ${cleanupMessage}`);
+        }
+      }
+      throw error;
+    }
+  },
+  async deleteFormAttachments(bucket: FormAttachmentBucket, paths: string[]): Promise<void> {
+    for (const path of paths || []) {
+      await this.callPayVendorEdgeFunction({ operation: 'delete_form_attachment', bucket, path });
+    }
+  },
+  getFormAttachmentPublicUrl(bucket: FormAttachmentBucket, path: string): string {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  },
+  async uploadPayVendorAttachments(files: File[]): Promise<Array<{ name: string; type: string; size: number; storagePath: string; url: string }>> {
+    return this.uploadFormAttachments('pay a vendor attachment', files);
+  },
+  async deletePayVendorAttachments(paths: string[]): Promise<void> {
+    await this.deleteFormAttachments('pay a vendor attachment', paths);
   },
 
   async savePayEmployeeEntry(payload: Record<string, any>, rowId?: string): Promise<any> {
@@ -557,25 +783,12 @@ export const SupabaseService = {
   },
 
   async uploadOtherIncomeAttachments(files: File[]): Promise<string[]> {
-    if (!supabase) throw new Error('Supabase is not configured.');
-    const paths: string[] = [];
-    for (const file of files || []) {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const path = `${globalThis.crypto.randomUUID()}-${safeName}`;
-      const { error } = await supabase.storage.from('fss-other-income').upload(path, file, {
-        upsert: false,
-        contentType: file.type || undefined
-      });
-      if (error) throw error;
-      paths.push(path);
-    }
-    return paths;
+    const uploaded = await this.uploadFormAttachments('other_income', files);
+    return uploaded.map(file => file.storagePath);
   },
 
   async deleteOtherIncomeAttachments(paths: string[]): Promise<void> {
-    if (!supabase || !paths.length) return;
-    const { error } = await supabase.storage.from('fss-other-income').remove(paths);
-    if (error) throw error;
+    await this.deleteFormAttachments('other_income', paths);
   },
 
   async saveOtherIncomeEntry(payload: Record<string, any>, rowId?: string): Promise<any> {

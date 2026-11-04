@@ -7,7 +7,7 @@ The IUOVA app uses a local role selector rather than Supabase Auth. Browser-side
 - The browser calls `/api/fss-pay-vendor` on the local Vite server.
 - The Vite middleware accepts only loopback requests with a same-origin `Origin` header and keeps `FSS_EDGE_ACCESS_TOKEN` on the server.
 - The middleware forwards to this Edge Function with the access token.
-- The Edge Function checks the token in constant time and exposes only allowlisted CRUD operations on `fss_form_pay_vendor`.
+- The Edge Function checks the token in constant time and exposes allowlisted CRUD operations on `fss_form_pay_vendor`, plus scoped signed-upload and deletion operations for the `pay a vendor attachment` Storage bucket.
 - `SUPABASE_SERVICE_ROLE_KEY` is read only inside the Edge Function runtime. Supabase injects it there; never put it in an app `.env` or `VITE_*` variable.
 - RLS remains enabled. The function uses the privileged client, so it applies an explicit owner scope (`FSS_DEFAULT_CREATED_BY`) itself. If no default owner is configured, it scopes records to `created_by IS NULL` for this development installation.
 
@@ -31,4 +31,4 @@ The browser never receives `FSS_EDGE_ACCESS_TOKEN` or `SUPABASE_SERVICE_ROLE_KEY
 
 ## Operations
 
-POST JSON operations are `select`, `insert`, `update`, and `delete`. The function permits only fields belonging to `fss_form_pay_vendor`, assigns `created_by` from the configured owner scope, and uses a deterministic row UUID for retries of app-originated inserts. No other table is accessed.
+POST JSON operations are `select`, `insert`, `update`, `delete`, `create_attachment_upload`, and `delete_attachment`. Upload links are generated only for image/PDF files and paths are scoped to the configured owner; file contents upload directly from the browser to Supabase Storage. The function permits only fields belonging to `fss_form_pay_vendor`, assigns `created_by` from the configured owner scope, and uses a deterministic row UUID for retries of app-originated inserts. No other table is accessed.

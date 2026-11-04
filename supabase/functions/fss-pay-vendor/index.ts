@@ -1,6 +1,19 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
 const TABLE = 'fss_form_pay_vendor';
+const ATTACHMENT_BUCKETS = new Set([
+  'other_income',
+  'client_payment',
+  'other_expense',
+  'tax_saturatory',
+  'pay an employee attachment',
+  'pay a vendor attachment'
+]);
+const ATTACHMENT_ROOT = 'fss-form-attachments';
+const ALLOWED_ATTACHMENT_TYPES = new Set([
+  'application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'image/bmp', 'image/tiff', 'image/heic', 'image/heif'
+]);
 const ALLOWED_COLUMNS = new Set([
   'recorded_by', 'vendor_id', 'vendor_name', 'category', 'department',
   'vendor_bank_name', 'vendor_account_number', 'vendor_ifsc', 'credit_days',
@@ -78,8 +91,8 @@ Deno.serve(async request => {
 
   const operation = body.operation;
   const id = typeof body.id === 'string' ? body.id : '';
-  if (!['select', 'insert', 'update', 'delete'].includes(String(operation))) {
-    return json(400, { error: 'operation must be select, insert, update or delete.' });
+  if (!['select', 'insert', 'update', 'delete', 'create_form_attachment_upload', 'delete_form_attachment'].includes(String(operation))) {
+    return json(400, { error: 'Unsupported Pay a Vendor operation.' });
   }
   if (['update', 'delete'].includes(String(operation)) && !UUID_RE.test(id)) {
     return json(400, { error: 'A valid row UUID is required for update and delete.' });
@@ -92,6 +105,45 @@ Deno.serve(async request => {
   const scopeOwner = (query: any) => ownerId ? query.eq('created_by', ownerId) : query.is('created_by', null);
 
   try {
+    if (operation === 'create_form_attachment_upload') {
+      const bucket = String(body.bucket || '');
+      const name = String(body.name || '').trim();
+      const contentType = String(body.content_type || '');
+      if (!ATTACHMENT_BUCKETS.has(bucket)) return json(400, { error: 'Unsupported form attachment bucket.' });
+      if (!name || name.length > 255) return json(400, { error: 'A valid attachment filename is required.' });
+      if (!ALLOWED_ATTACHMENT_TYPES.has(contentType)) {
+        return json(400, { error: 'Only images and PDFs can be attached.' });
+      }
+      const safeName = name.replace(/[^A-Za-z0-9._-]/g, '_') || 'attachment';
+      const ownerScope = ownerId || 'development';
+      const path = `${ATTACHMENT_ROOT}/${bucket}/${ownerScope}/${crypto.randomUUID()}-${safeName}`;
+      const storage = database.storage.from(bucket);
+      const { data: signedUpload, error: signedUploadError } = await storage.createSignedUploadUrl(path);
+      if (signedUploadError) throw signedUploadError;
+      const { data: publicUrl } = storage.getPublicUrl(path);
+      return json(200, {
+        data: {
+          path,
+          token: signedUpload.token,
+          url: publicUrl.publicUrl
+        }
+      });
+    }
+
+    if (operation === 'delete_form_attachment') {
+      const bucket = String(body.bucket || '');
+      const path = String(body.path || '');
+      if (!ATTACHMENT_BUCKETS.has(bucket)) return json(400, { error: 'Unsupported form attachment bucket.' });
+      const ownerScope = ownerId || 'development';
+      const allowedPrefix = `${ATTACHMENT_ROOT}/${bucket}/${ownerScope}/`;
+      if (!path.startsWith(allowedPrefix) || path.slice(allowedPrefix.length).includes('/')) {
+        return json(403, { error: 'Attachment path is outside the configured form and owner scope.' });
+      }
+      const { error } = await database.storage.from(bucket).remove([path]);
+      if (error) throw error;
+      return json(200, { data: { path } });
+    }
+
     if (operation === 'select') {
       let query = scopeOwner(database.from(TABLE).select('*'));
       if (id) query = query.eq('id', id);
