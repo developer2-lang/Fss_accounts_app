@@ -560,6 +560,18 @@ const api = {
     api.guard('entry.delete');
     const e = api.get('entries', id);
     if (api.isLocked(e.date)) throw new Error(monthLabel(ymOf(e.date), true) + ' is locked.');
+    if (e.supabase_tax_statutory_id && typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteTaxStatutoryEntry === 'function') {
+      await (window as any).__supabaseDeleteTaxStatutoryEntry(e.supabase_tax_statutory_id);
+    }
+    if (e.supabase_other_expense_id && typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteOtherExpenseEntry === 'function') {
+      await (window as any).__supabaseDeleteOtherExpenseEntry(e.supabase_other_expense_id);
+    }
+    if (e.supabase_client_payment_id && typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteClientPaymentEntry === 'function') {
+      await (window as any).__supabaseDeleteClientPaymentEntry(e.supabase_client_payment_id);
+    }
+    if (e.supabase_other_income_id && typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteOtherIncomeEntry === 'function') {
+      await (window as any).__supabaseDeleteOtherIncomeEntry(e.supabase_other_income_id);
+    }
     Object.assign(e, { deleted: true, deletedBy: api.me().id, deletedAt: nowISO() });
     api.log('delete', 'entries', id, describe('entries', e)); Store.persist();
     if (typeof window !== 'undefined' && typeof (window as any).__supabaseCancelTransaction === 'function') {
@@ -580,6 +592,18 @@ const api = {
     api.guard('entry.purge');
     const e = api.get('entries', id);
     for (const a of e.attachments || []) await FileStore.del(a.id).catch(() => { });
+    if (e.supabase_tax_statutory_id && typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteTaxStatutoryEntry === 'function') {
+      await (window as any).__supabaseDeleteTaxStatutoryEntry(e.supabase_tax_statutory_id);
+    }
+    if (e.supabase_other_expense_id && typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteOtherExpenseEntry === 'function') {
+      await (window as any).__supabaseDeleteOtherExpenseEntry(e.supabase_other_expense_id);
+    }
+    if (e.supabase_client_payment_id && typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteClientPaymentEntry === 'function') {
+      await (window as any).__supabaseDeleteClientPaymentEntry(e.supabase_client_payment_id);
+    }
+    if (e.supabase_other_income_id && typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteOtherIncomeEntry === 'function') {
+      await (window as any).__supabaseDeleteOtherIncomeEntry(e.supabase_other_income_id);
+    }
     Store.data.entries = Store.data.entries.filter(x => x.id !== id);
     api.log('purge', 'entries', id, describe('entries', e)); Store.persist();
     if (typeof window !== 'undefined' && typeof (window as any).__supabaseDeleteTransaction === 'function') {
@@ -975,6 +999,7 @@ function buildSeed() {
   });
   D.parties.filter(p => p.kind === 'client' || p.kind === 'vendor').forEach(p => { p.email = partyEmails(p).join(', '); p.phone = (partyContacts(p).find(c => c.phone) || {}).phone || ''; });
   [['ot_gst', 'GST Department (Govt.)'], ['ot_it', 'Income Tax Department'], ['ot_pt', 'Maharashtra Profession Tax'], ['ot_hdfc', 'HDFC Bank'], ['ot_owner', 'Owner – Capital Account']].forEach(([id, n]) => P(id, 'other', n));
+  Object.assign(party('ot_hdfc'), { gstin: '27AAACH2702H1ZX', gstType: 'intra' });
   const EMP = [
     ['em_ceo', 'Founder (CEO)', 'dep_mgmt', 'Founder & MD', 250000, '2016-04-01'],
     ['em_priya', 'Priya Nair', 'dep_design', 'Design Lead', 140000, '2019-07-01'],
@@ -1868,7 +1893,7 @@ function sumTree(nodes, len) {
   return nodes;
 }
 function pruneTree(nodes) {
-  return nodes.filter(n => { if (n.children) n.children = pruneTree(n.children); return n.vals.some(v => Math.abs(v) > 0.004) || (n.children && n.children.length); });
+  return nodes.filter(n => { if (n.children) n.children = pruneTree(n.children); return n.keepEmpty || n.vals.some(v => Math.abs(v) > 0.004) || (n.children && n.children.length); });
 }
 /** Collapse a node whose only child is a single group: bucket → categories directly. */
 function flattenSingle(nodes) {
@@ -1949,6 +1974,10 @@ function aggregate(entries, periods, keyFn, periodOf = e => ymOf(e.date)) {
 function deletedCategoryMonthKeys(entries: any[] | undefined, nameOf: (e: any) => string): Set<string> {
   const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
   const out = new Set<string>();
+  // Permanent deletion removes the entry itself, so retain its category/month key
+  // while cached cashflow aggregates are recalculated.
+  const purgedKeys = typeof window !== 'undefined' ? ((window as any).__recentlyDeletedCashKeys || []) : [];
+  for (const key of purgedKeys) out.add(String(key));
   const list = entries || (typeof api !== 'undefined' && typeof api.list === 'function' ? ((api as any).list('entries') || []) : []) || [];
   for (const e of list) {
     if (!e || e.type === 'transfer') continue;
@@ -1959,6 +1988,7 @@ function deletedCategoryMonthKeys(entries: any[] | undefined, nameOf: (e: any) =
 }
 /** Category tree: bucket → group → category. valsOf(cat) returns per-period values. */
 function categoryTree(type, valsOf, scope, drillBase = {}) {
+  const normalizeCategory = (value: string) => String(value || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
   let cats = api.list('categories').filter(c => c.type === type);
   if (type === 'inflow' && typeof Store !== 'undefined' && Store.data?.fss_operation_receipts) {
     const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
@@ -2067,7 +2097,7 @@ function categoryTree(type, valsOf, scope, drillBase = {}) {
       children: [...new Set(bc.map(c => c.group))].map(g => {
         let groupCats = bc.filter(c => c.group === g);
         if (g === 'People') {
-          const ORDER = ['salaries', 'ceo fixed salary', 'staff welfare'];
+          const ORDER = ['salaries', 'ceo fixed salary', 'staff welfare', 'bonus & incentives'];
           const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
           groupCats = groupCats.slice().sort((a, b) => {
             const aName = norm(a.name);
@@ -2096,7 +2126,14 @@ function categoryTree(type, valsOf, scope, drillBase = {}) {
         }
         return {
           key: scope + type + ':' + bid + ':' + g, label: g, drill: { ...drillBase, bucket: bid, group: g },
-          children: groupCats.map(c => ({ key: scope + 'c:' + c.id, label: c.name, vals: valsOf(c), drill: { ...drillBase, categoryId: c.id } })),
+          children: groupCats.map(c => ({
+            key: scope + 'c:' + c.id,
+            label: c.name,
+            vals: valsOf(c),
+            drill: { ...drillBase, categoryId: c.id },
+            keepEmpty: type === 'outflow' && bid === 'op_cost' && g === 'People'
+              && Store.data?.fss_outflow_oc_people?.some((row: any) => normalizeCategory(row.category) === normalizeCategory(c.name))
+          })),
         };
       }),
     };
@@ -2127,7 +2164,7 @@ function computeCashflowInflowRows(entries: any[], fy = 2026) {
 
   // Active entries within the financial year to date
   const allEntries = entries || (typeof api !== 'undefined' && typeof api.list === 'function' ? api.list('entries') : []) || [];
-  const activeEntries = allEntries.filter((e: any) => !e.deleted && e.type !== 'transfer' && (!fyF || e.date >= fyF) && (!fyT || e.date <= fyT));
+  const activeEntries = allEntries.filter((e: any) => !e.deleted && e.type !== 'transfer');
   const activeInflows = activeEntries.filter((e: any) => e.type === 'inflow');
 
   // Month columns: User specified that jan_26, feb_26, mar_26 should remain empty (0.00),
@@ -2136,15 +2173,15 @@ function computeCashflowInflowRows(entries: any[], fy = 2026) {
     { col: 'jan_26', ym: null },
     { col: 'feb_26', ym: null },
     { col: 'mar_26', ym: null },
-    { col: 'apr_26', ym: '2026-04' },
-    { col: 'may_26', ym: '2026-05' },
-    { col: 'jun_26', ym: '2026-06' },
-    { col: 'jul_26', ym: '2026-07' },
-    { col: 'aug_26', ym: '2026-08' },
-    { col: 'sep_26', ym: '2026-09' },
-    { col: 'oct_26', ym: '2026-10' },
-    { col: 'nov_26', ym: '2026-11' },
-    { col: 'dec_26', ym: '2026-12' },
+    { col: 'apr_26', ym: `${currentFy}-04` },
+    { col: 'may_26', ym: `${currentFy}-05` },
+    { col: 'jun_26', ym: `${currentFy}-06` },
+    { col: 'jul_26', ym: `${currentFy}-07` },
+    { col: 'aug_26', ym: `${currentFy}-08` },
+    { col: 'sep_26', ym: `${currentFy}-09` },
+    { col: 'oct_26', ym: `${currentFy}-10` },
+    { col: 'nov_26', ym: `${currentFy}-11` },
+    { col: 'dec_26', ym: `${currentFy}-12` },
   ];
 
   // Try extracting directly from categoryTree / finishTree if available for 100% UI consistency
@@ -2210,7 +2247,7 @@ function computeCashflowInflowRows(entries: any[], fy = 2026) {
       const total = activeInflows
         .filter((e: any) => {
           if (!filterFn(e)) return false;
-          return (e.date || '').slice(0, 7) === m.ym;
+          return cashflowPeriodOf(e) === m.ym;
         })
         .reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
       result[m.col] = Math.round(total * 100) / 100;
@@ -2490,8 +2527,8 @@ export function computeCashflowPeopleRows(entries?: any[], fy = 2026) {
   const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
   const existingRows = (typeof Store !== 'undefined' && Store.data?.fss_outflow_oc_people) || [];
 
-  const getMonthlyForCategory = (catName: string, filterFn: (e: any) => boolean, rowId?: number) => {
-    const existing = existingRows.find((r: any) => (rowId && r.id === rowId) || norm(r.category) === norm(catName));
+  const getMonthlyForCategory = (catName: string, filterFn: (e: any) => boolean) => {
+    const existing = existingRows.find((r: any) => norm(r.category) === norm(catName));
     const result: Record<string, number> = {};
     for (const m of monthCols) {
       if (!m.ym) {
@@ -2505,10 +2542,13 @@ export function computeCashflowPeopleRows(entries?: any[], fy = 2026) {
         })
         .reduce((s: number, e: any) => s + (Number(e.amount != null ? e.amount : e.taxable) || 0), 0);
 
+      const storedValue = existing && existing[m.col] != null ? Number(existing[m.col]) || 0 : 0;
       if (total > 0) {
+        // Active transactions are authoritative. Keeping max(live, stored) prevents
+        // deleted or edited transactions from reducing the monthly People total.
         result[m.col] = Math.round(total * 100) / 100;
       } else if (existing && existing[m.col] != null) {
-        const hasDeleted = (Store.data?.entries || []).some((e: any) => e.deleted && e.type === 'outflow' && String(e.date || '').slice(0, 7) === m.ym && (norm(e.categoryId || '') === norm(catName) || norm((api.get('categories', e.categoryId)?.name || e.category || '')) === norm(catName)));
+        const hasDeleted = (Store.data?.entries || []).some((e: any) => e.deleted && e.type === 'outflow' && cashflowPeriodOf(e) === m.ym && (norm(e.categoryId || '') === norm(catName) || norm((api.get('categories', e.categoryId)?.name || e.category || '')) === norm(catName)));
         if (hasDeleted) {
           result[m.col] = 0;
         } else {
@@ -2539,25 +2579,39 @@ export function computeCashflowPeopleRows(entries?: any[], fy = 2026) {
     return cid === 'cat_welfare' || cname.includes('welfare');
   };
 
-  const salaries = getMonthlyForCategory('Salaries', isSalaries, 1);
-  const ceo = getMonthlyForCategory('CEO Fixed Salary', isCeo, 2);
-  const welfare = getMonthlyForCategory('Staff Welfare', isWelfare, 3);
+  const isBonus = (e: any) => {
+    const cid = (e.categoryId || '').toLowerCase();
+    const cname = (api.get('categories', e.categoryId)?.name || e.category || e.description || '').toLowerCase();
+    return cid === 'cat_bonus' || cname.includes('bonus') || cname.includes('incentive');
+  };
+
+  const salaries = getMonthlyForCategory('Salaries', isSalaries);
+  const ceo = getMonthlyForCategory('CEO Fixed Salary', isCeo);
+  const welfare = getMonthlyForCategory('Staff Welfare', isWelfare);
 
   const peopleRows: any[] = [
-    { id: 1, category: 'Salaries', ...salaries },
-    { id: 2, category: 'CEO Fixed Salary', ...ceo },
-    { id: 3, category: 'Staff Welfare', ...welfare }
+    { category: 'Salaries', ...salaries },
+    { category: 'CEO Fixed Salary', ...ceo },
+    { category: 'Staff Welfare', ...welfare }
   ];
+
+  const bonusRow = existingRows.find((r: any) => norm(r.category) === norm('Bonus & Incentives'));
+  const hasBonusEntries = activeOutflows.some(isBonus);
+  if (bonusRow || hasBonusEntries) {
+    peopleRows.push({
+      category: bonusRow?.category || 'Bonus & Incentives',
+      ...getMonthlyForCategory('Bonus & Incentives', isBonus)
+    });
+  }
 
   for (const r of existingRows) {
     const rName = norm(r.category);
-    if (!rName.includes('total') && !['salaries', 'ceo fixed salary', 'staff welfare'].includes(rName)) {
+    if (!rName.includes('total') && !peopleRows.some((row: any) => norm(row.category) === rName)) {
       const rowData: Record<string, number> = {};
       for (const m of monthCols) {
         rowData[m.col] = m.ym ? Number(r[m.col] || 0) : 0;
       }
       peopleRows.push({
-        id: r.id,
         category: r.category,
         ...rowData
       });
@@ -2577,16 +2631,17 @@ export function computeCashflowOutflowProjectCostRows(entries?: any[], fy = 2026
     { col: 'jan_26', ym: null },
     { col: 'feb_26', ym: null },
     { col: 'mar_26', ym: null },
-    { col: 'apr_26', ym: '2026-04' },
-    { col: 'may_26', ym: '2026-05' },
-    { col: 'jun_26', ym: '2026-06' },
-    { col: 'jul_26', ym: '2026-07' },
-    { col: 'aug_26', ym: '2026-08' },
-    { col: 'sep_26', ym: '2026-09' },
-    { col: 'oct_26', ym: '2026-10' },
-    { col: 'nov_26', ym: '2026-11' },
-    { col: 'dec_26', ym: '2026-12' }
+    { col: 'apr_26', ym: `${fy}-04` },
+    { col: 'may_26', ym: `${fy}-05` },
+    { col: 'jun_26', ym: `${fy}-06` },
+    { col: 'jul_26', ym: `${fy}-07` },
+    { col: 'aug_26', ym: `${fy}-08` },
+    { col: 'sep_26', ym: `${fy}-09` },
+    { col: 'oct_26', ym: `${fy}-10` },
+    { col: 'nov_26', ym: `${fy}-11` },
+    { col: 'dec_26', ym: `${fy}-12` }
   ];
+
   const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
   const deletedCashKeys = deletedCategoryMonthKeys(allEntries, (e: any) => (typeof api !== 'undefined' && typeof api.get === 'function' ? (api.get('categories', e.categoryId)?.name || e.category || '') : (e.category || '')));
 
@@ -2619,7 +2674,6 @@ export function computeCashflowOutflowProjectCostRows(entries?: any[], fy = 2026
       return cid === 'cat_test' || cname.includes('testing');
     }
   };
-
   const childRows: any[] = [];
   for (const [catName, matchFn] of Object.entries(catMatch)) {
     const monthlyData: Record<string, any> = {};
@@ -2628,19 +2682,15 @@ export function computeCashflowOutflowProjectCostRows(entries?: any[], fy = 2026
         monthlyData[m.col] = null;
       } else {
         const isDeleted = deletedCashKeys.has(norm(catName) + '|' + m.ym);
-        if (isDeleted) {
-          monthlyData[m.col] = 0;
-        } else {
-          const matchingOutflows = activeOutflows.filter((e: any) => matchFn(e) && (e.date || '').slice(0, 7) === m.ym);
-          let sum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
-          const fallback = fallbackValues[catName]?.[m.col] || 0;
-          if (sum === 0) {
-            sum = fallback;
-          } else if (sum < fallback) {
-            sum = fallback;
-          }
-          monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
-        }
+        // Use the same period resolution as the UI, including taxPeriod when present.
+        const matchingOutflows = activeOutflows.filter((e: any) => matchFn(e) && cashflowPeriodOf(e) === m.ym);
+        const sum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+        const fallback = fallbackValues[catName]?.[m.col] || 0;
+        // Active transactions win over a deleted-entry marker. A prior deleted transaction
+        // in this category/month must not suppress other live transactions in that month.
+        // The fixed category IDs are not authoritative across imported/Supabase datasets.
+        const value = matchingOutflows.length > 0 ? sum : isDeleted ? 0 : fallback;
+        monthlyData[m.col] = value ? Math.round(value * 100) / 100 : 0;
       }
     }
     const fytd = monthCols.reduce((acc: number, m) => {
@@ -2995,15 +3045,15 @@ export function computeCashflowOutflowTravelRows(entries?: any[], fy = 2026) {
     { col: 'jan26', ym: null },
     { col: 'feb26', ym: null },
     { col: 'mar26', ym: null },
-    { col: 'apr26', ym: '2026-04' },
-    { col: 'may26', ym: '2026-05' },
-    { col: 'jun26', ym: '2026-06' },
-    { col: 'july26', ym: '2026-07' },
-    { col: 'aug26', ym: '2026-08' },
-    { col: 'sept26', ym: '2026-09' },
-    { col: 'oct26', ym: '2026-10' },
-    { col: 'nov26', ym: '2026-11' },
-    { col: 'dec26', ym: '2026-12' }
+    { col: 'apr26', ym: `${fy}-04` },
+    { col: 'may26', ym: `${fy}-05` },
+    { col: 'jun26', ym: `${fy}-06` },
+    { col: 'july26', ym: `${fy}-07` },
+    { col: 'aug26', ym: `${fy}-08` },
+    { col: 'sept26', ym: `${fy}-09` },
+    { col: 'oct26', ym: `${fy}-10` },
+    { col: 'nov26', ym: `${fy}-11` },
+    { col: 'dec26', ym: `${fy}-12` }
   ];
   const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
   const deletedCashKeys = deletedCategoryMonthKeys(allEntries, (e: any) => (typeof api !== 'undefined' && typeof api.get === 'function' ? (api.get('categories', e.categoryId)?.name || e.category || '') : (e.category || '')));
@@ -3034,7 +3084,7 @@ export function computeCashflowOutflowTravelRows(entries?: any[], fy = 2026) {
         monthlyData[m.col] = null;
       } else {
         const isDeleted = deletedCashKeys.has(norm(catName) + '|' + m.ym);
-        const matchingOutflows = activeOutflows.filter((e: any) => matchFn(e) && (e.date || '').slice(0, 7) === m.ym);
+        const matchingOutflows = activeOutflows.filter((e: any) => matchFn(e) && cashflowPeriodOf(e) === m.ym);
         const entrySum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
         const fallback = fallbackValues[catName]?.[m.col] || 0;
         const sum = matchingOutflows.length > 0 ? entrySum : isDeleted ? 0 : fallback;
@@ -3092,15 +3142,15 @@ export function computeCashflowOutflowProfessionalAdminRows(entries?: any[], fy 
     { col: 'jan26', ym: null },
     { col: 'feb26', ym: null },
     { col: 'mar26', ym: null },
-    { col: 'apr26', ym: '2026-04' },
-    { col: 'may26', ym: '2026-05' },
-    { col: 'jun26', ym: '2026-06' },
-    { col: 'july26', ym: '2026-07' },
-    { col: 'aug26', ym: '2026-08' },
-    { col: 'sept26', ym: '2026-09' },
-    { col: 'oct26', ym: '2026-10' },
-    { col: 'nov26', ym: '2026-11' },
-    { col: 'dec26', ym: '2026-12' }
+    { col: 'apr26', ym: `${fy}-04` },
+    { col: 'may26', ym: `${fy}-05` },
+    { col: 'jun26', ym: `${fy}-06` },
+    { col: 'july26', ym: `${fy}-07` },
+    { col: 'aug26', ym: `${fy}-08` },
+    { col: 'sept26', ym: `${fy}-09` },
+    { col: 'oct26', ym: `${fy}-10` },
+    { col: 'nov26', ym: `${fy}-11` },
+    { col: 'dec26', ym: `${fy}-12` }
   ];
   const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
   const deletedCashKeys = deletedCategoryMonthKeys(allEntries, (e: any) => (typeof api !== 'undefined' && typeof api.get === 'function' ? (api.get('categories', e.categoryId)?.name || e.category || '') : (e.category || '')));
@@ -3115,17 +3165,17 @@ export function computeCashflowOutflowProfessionalAdminRows(entries?: any[], fy 
     'CA, Audit & Accounting': (e: any) => {
       const cid = (e.categoryId || '').toLowerCase();
       const cname = norm(typeof api !== 'undefined' && typeof api.get === 'function' ? (api.get('categories', e.categoryId)?.name || e.category || '') : (e.category || ''));
-      return cid === 'cat_ca' || cname.includes('ca') || cname.includes('audit') || cname.includes('accounting');
+      return cid === 'cat_ca' || cname === norm('CA, Audit & Accounting');
     },
     'Legal & Compliance': (e: any) => {
       const cid = (e.categoryId || '').toLowerCase();
       const cname = norm(typeof api !== 'undefined' && typeof api.get === 'function' ? (api.get('categories', e.categoryId)?.name || e.category || '') : (e.category || ''));
-      return cid === 'cat_legal' || cname.includes('legal') || cname.includes('compliance');
+      return cid === 'cat_legal' || cname === norm('Legal & Compliance');
     },
     'Bank Charges': (e: any) => {
       const cid = (e.categoryId || '').toLowerCase();
       const cname = norm(typeof api !== 'undefined' && typeof api.get === 'function' ? (api.get('categories', e.categoryId)?.name || e.category || '') : (e.category || ''));
-      return cid === 'cat_bank' || cname.includes('bank') || cname.includes('charge');
+      return cid === 'cat_bank' || cname === norm('Bank Charges');
     }
   };
 
@@ -3195,15 +3245,15 @@ export function computeCashflowOutflowTaxStatutoryRows(entries?: any[], fy = 202
     { col: 'jan_26', ym: null },
     { col: 'feb_26', ym: null },
     { col: 'mar_26', ym: null },
-    { col: 'apr_26', ym: '2026-04' },
-    { col: 'may_26', ym: '2026-05' },
-    { col: 'jun_26', ym: '2026-06' },
-    { col: 'jul_26', ym: '2026-07' },
-    { col: 'aug_26', ym: '2026-08' },
-    { col: 'sep_26', ym: '2026-09' },
-    { col: 'oct_26', ym: '2026-10' },
-    { col: 'nov_26', ym: '2026-11' },
-    { col: 'dec_26', ym: '2026-12' }
+    { col: 'apr_26', ym: `${fy}-04` },
+    { col: 'may_26', ym: `${fy}-05` },
+    { col: 'jun_26', ym: `${fy}-06` },
+    { col: 'jul_26', ym: `${fy}-07` },
+    { col: 'aug_26', ym: `${fy}-08` },
+    { col: 'sep_26', ym: `${fy}-09` },
+    { col: 'oct_26', ym: `${fy}-10` },
+    { col: 'nov_26', ym: `${fy}-11` },
+    { col: 'dec_26', ym: `${fy}-12` }
   ];
   const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
   const deletedCashKeys = deletedCategoryMonthKeys(allEntries, (e: any) => (typeof api !== 'undefined' && typeof api.get === 'function' ? (api.get('categories', e.categoryId)?.name || e.category || '') : (e.category || '')));
@@ -3244,12 +3294,10 @@ export function computeCashflowOutflowTaxStatutoryRows(entries?: any[], fy = 202
         if (isDeleted && matchingOutflows.length === 0) {
           monthlyData[m.col] = 0;
         } else {
-          let sum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+          const sum = matchingOutflows.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
           const fallback = fallbackValues[catName]?.[m.col] || 0;
-          if (sum === 0 || sum < fallback) {
-            sum = fallback;
-          }
-          monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
+          const value = matchingOutflows.length > 0 ? sum : fallback;
+          monthlyData[m.col] = value ? Math.round(value * 100) / 100 : 0;
         }
       }
     }
@@ -3304,15 +3352,15 @@ export function computeCashflowOutflowCapexRows(entries?: any[], fy = 2026) {
     { col: 'jan_26', ym: null },
     { col: 'feb_26', ym: null },
     { col: 'mar_26', ym: null },
-    { col: 'apr_26', ym: '2026-04' },
-    { col: 'may_26', ym: '2026-05' },
-    { col: 'jun_26', ym: '2026-06' },
-    { col: 'jul_26', ym: '2026-07' },
-    { col: 'aug_26', ym: '2026-08' },
-    { col: 'sep_26', ym: '2026-09' },
-    { col: 'oct_26', ym: '2026-10' },
-    { col: 'nov_26', ym: '2026-11' },
-    { col: 'dec_26', ym: '2026-12' }
+    { col: 'apr_26', ym: `${fy}-04` },
+    { col: 'may_26', ym: `${fy}-05` },
+    { col: 'jun_26', ym: `${fy}-06` },
+    { col: 'jul_26', ym: `${fy}-07` },
+    { col: 'aug_26', ym: `${fy}-08` },
+    { col: 'sep_26', ym: `${fy}-09` },
+    { col: 'oct_26', ym: `${fy}-10` },
+    { col: 'nov_26', ym: `${fy}-11` },
+    { col: 'dec_26', ym: `${fy}-12` }
   ];
 
   const norm = (value: string) => String(value || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
@@ -3321,6 +3369,16 @@ export function computeCashflowOutflowCapexRows(entries?: any[], fy = 2026) {
       ? (api.get('categories', e.categoryId)?.name || e.category || '')
       : (e.category || '')
   ));
+  // Use the exact same live category/month aggregation as the cashflow UI.
+  const uiPeriods = typeof fyPeriods === 'function' ? fyPeriods(fy, 'monthly') : [];
+  const uiPeriodIndex: Record<string, number> = {};
+  uiPeriods.forEach((p: any, index: number) => {
+    (p.months || []).forEach((ym: string) => { uiPeriodIndex[ym] = index; });
+  });
+  const uiCapexSums = typeof aggregate === 'function'
+    ? aggregate(activeOutflows, uiPeriods, (e: any) => e.categoryId, cashflowPeriodOf)
+    : {};
+
   const fallbackValues: Record<string, Record<string, number>> = {
     'Equipment & Hardware': { apr_26: 0, may_26: 0, jun_26: 336300, jul_26: 0, aug_26: 0, sep_26: 0, oct_26: 636, nov_26: 0, dec_26: 0 }
   };
@@ -3341,18 +3399,14 @@ export function computeCashflowOutflowCapexRows(entries?: any[], fy = 2026) {
       if (!m.ym) {
         monthlyData[m.col] = null;
       } else {
-        const matching = activeOutflows.filter((e: any) => {
-          if ((e.date || '').slice(0, 7) !== m.ym) return false;
-          if (String(e.categoryId || '') === String(category.id || '')) return true;
-          const entryCategory = typeof api !== 'undefined' && typeof api.get === 'function'
-            ? (api.get('categories', e.categoryId)?.name || e.category || '')
-            : (e.category || '');
-          return norm(entryCategory) === norm(catName);
-        });
-        const entrySum = matching.reduce((s: number, e: any) => s + Number(e.amount != null ? e.amount : e.taxable || 0), 0);
+        const matching = activeOutflows.filter((e: any) => (
+          String(e.categoryId || '') === String(category.id || '') && cashflowPeriodOf(e) === m.ym
+        ));
+        const uiIndex = uiPeriodIndex[m.ym];
+        const uiValue = uiIndex == null ? 0 : Number((uiCapexSums[category.id] || [])[uiIndex] || 0);
         const isDeleted = deletedCashKeys.has(norm(catName) + '|' + m.ym);
         const fb = fallbackValues[catName]?.[m.col] || 0;
-        const sum = matching.length > 0 ? entrySum : isDeleted ? 0 : fb;
+        const sum = matching.length > 0 ? uiValue : isDeleted ? 0 : fb;
         monthlyData[m.col] = sum ? Math.round(sum * 100) / 100 : 0;
       }
     }
@@ -3687,6 +3741,12 @@ PAGES.cashflow = {
               return resolvedVal;
             });
           }
+          // Capex is rendered directly from the live transaction aggregation in the
+          // statement. Keep the category rows on that same source so a newly added or
+          // deleted November entry cannot be replaced by an older Supabase aggregate.
+          if (bucketOf(c) === 'capex') {
+            return agg[c.id] || periods.map(() => 0);
+          }
           const financingOwnerRows = (Store.data?.fss_outflow_financing_and_owner || []).filter((r: any) => {
             const name = norm(r.category);
             return !name.includes('total');
@@ -3746,8 +3806,12 @@ PAGES.cashflow = {
                 return sum + Number(matchPpl[col] ?? 0);
               }, 0);
               const liveVal = (agg[c.id] || [])[i] || 0;
-              // A soft-deleted transaction must not resurface from the stored aggregate for this category/month.
-              const resolvedVal = monthsArr.some((ym: string) => deletedCashKeys.has(norm(c.name) + '|' + ym)) ? liveVal : Math.max(liveVal, sbVal);
+              const hasStoredValues = monthsArr.every((ym: string) => {
+                const col = M_COL[ym.slice(5, 7)];
+                return col && matchPpl[col] !== null && matchPpl[col] !== undefined;
+              });
+              const isDeleted = monthsArr.some((ym: string) => deletedCashKeys.has(norm(c.name) + '|' + ym));
+              const resolvedVal = isDeleted ? liveVal : hasStoredValues ? sbVal : liveVal;
               return resolvedVal;
             });
           }
@@ -3854,8 +3918,9 @@ PAGES.cashflow = {
               }, 0);
               const liveVal = (agg[c.id] || [])[i] || 0;
               const isDeleted = trvMonthsArr.some((ym: string) => deletedCashKeys.has(norm(c.name) + '|' + ym));
-              if (isDeleted && liveVal === 0) return 0;
-              if (liveVal > 0) return Math.max(liveVal, sbVal);
+              // A deleted transaction invalidates the cached Travel aggregate for this month.
+              // Use the remaining live transactions before considering the stored row.
+              if (isDeleted) return liveVal;
               // Supabase is the source of truth for Travel
               const monthKey = p.months && p.months[0] ? M_COL_TRV[p.months[0].slice(5, 7)] : null;
               if (monthKey && matchTravel[monthKey] !== undefined && matchTravel[monthKey] !== null) {
@@ -3960,12 +4025,62 @@ PAGES.cashflow = {
     const levels = C.by === 'category' ? [['summary', 'Summary'], ['1', 'Groups'], ['all', 'All lines']] : [['summary', 'Departments'], ['all', 'With buckets']];
     const tin = periods.map((_, i) => sum(tree.inflow, n => n.vals[i])), tout = periods.map((_, i) => sum(tree.outflow, n => n.vals[i]));
     const TIN = sum(tin), TOUT = sum(tout);
+    const netCashFlow = tin.map((cashInflow, index) => r2(cashInflow - tout[index]));
+    const NET = sum(netCashFlow);
+    const opening: number[] = [];
+    const closing: number[] = [];
+    periods.forEach((period, index) => {
+      const openingBalance = index === 0
+        ? Calc.cash(addDays(period.from, -1))
+        : closing[index - 1];
+      const closingBalance = r2(openingBalance + netCashFlow[index]);
+      opening.push(openingBalance);
+      closing.push(closingBalance);
+    });
     const M_COL_MAP: Record<string, string> = {
       '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
       '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
       '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
       '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
     };
+    if (C.by === 'category' && C.period === 'monthly') {
+      const statementLabels = new Set([
+        'Operating costs', 'Project costs', 'Tax & statutory', 'Capex', 'Financing & owner'
+      ]);
+      (window as any).__cashflowOutflowSummaryUiRows = tree.outflow
+        .filter((node: any) => statementLabels.has(node.label))
+        .map((node: any) => {
+          const row: Record<string, any> = { category_name: node.label };
+          periods.forEach((period: any, index: number) => {
+            if (period.months.length !== 1) return;
+            const column = M_COL_MAP[period.months[0].slice(5, 7)];
+            if (column) row[column] = Number(node.vals[index] || 0);
+          });
+          return row;
+        });
+
+      const statementMonthRows = [
+        { category_name: 'Opening Balance', values: opening, fy_to_date: null, shares: null },
+        { category_name: 'Cash Inflow', values: tin, fy_to_date: TIN, shares: 100 },
+        { category_name: 'Cash Outflow', values: tout, fy_to_date: TOUT, shares: 100 },
+        { category_name: 'Net Cash Flow', values: netCashFlow, fy_to_date: NET, shares: null },
+        { category_name: 'Closing Balance', values: closing, fy_to_date: null, shares: null }
+      ];
+      (window as any).__cashflowStatementUiRows = statementMonthRows.map(statementRow => {
+        const row: Record<string, any> = {
+          category_name: statementRow.category_name,
+          sort_order: statementMonthRows.indexOf(statementRow),
+          fy_to_date: statementRow.fy_to_date,
+          shares: statementRow.shares
+        };
+        periods.forEach((period: any, index: number) => {
+          if (period.months.length !== 1) return;
+          const column = M_COL_MAP[period.months[0].slice(5, 7)];
+          if (column) row[column] = Number(statementRow.values[index] || 0);
+        });
+        return row;
+      });
+    }
     const cellsFor = (type, base) => (n, depth) => periods.map((p, i) => {
       const v = n.vals[i];
       const m = p.months[0];
@@ -4092,10 +4207,15 @@ PAGES.cashflow = {
       }
 
       let travelAttrs = '';
-      if (type === 'outflow' && depth > 0 && Store.data?.fss_outflow_oc_travel) {
+      if (type === 'outflow' && Store.data?.fss_outflow_oc_travel) {
         const norm = (s: string) => (s || '').toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
         const rName = norm(n.label);
-        const matchTrv = Store.data.fss_outflow_oc_travel.find((r: any) => {
+        const isTravelGroup = rName === 'travel' || rName.includes('total');
+        const travelRows = Store.data.fss_outflow_oc_travel.filter((r: any) => {
+          const name = norm(r.category);
+          return name !== 'travel' && !name.includes('total');
+        });
+        const matchTrv = isTravelGroup ? null : travelRows.find((r: any) => {
           const name = norm(r.category);
           return name === rName ||
             (n.drill?.categoryId === 'cat_travel' && (name.includes('travel') || name.includes('conveyance'))) ||
@@ -4169,7 +4289,6 @@ PAGES.cashflow = {
     }).join('')
       + `<td class="num tot-c" ${n.drill ? drillAttr(type, n.drill, fyF, lastTo) : ''}>${money(sum(n.vals))}</td><td class="num share"><span class="${depth ? 'faint' : 'muted'}">${fmtPct(pct(sum(n.vals), base))}</span></td>`;
     const balCells = vals => periods.map((p, i) => `<td class="num ${p.cur ? 'cur' : ''} ${vals[i] < 0 ? 'out' : ''}">${money(vals[i])}</td>`).join('') + '<td class="num tot-c"></td><td></td>';
-    const opening = periods.map(p => Calc.cash(addDays(p.from, -1))), closing = periods.map(p => Calc.cash(p.to < TODAY ? p.to : TODAY));
     const secRow = (label, vals, total, cls) => `<tr class="sec ${cls}"><td>${label}</td>${vals.map((v, i) => `<td class="num ${periods[i].cur ? 'cur' : ''}">${money(v)}</td>`).join('')}<td class="num tot-c">${money(total)}</td><td class="num share">100%</td></tr>`;
     const accOpen = OPEN.has(accNode.key);
     if (!len) return `<div class="card"><div class="empty"><b>No months to show yet</b>${esc(fyLabel(fy))} hasn't started.</div></div>`;
@@ -4186,7 +4305,7 @@ PAGES.cashflow = {
         <tr class="bal"><td>Opening balance</td>${balCells(opening)}</tr>
         ${secRow('Cash inflow', tin, TIN, 'in-sec')}${treeRowsHTML(tree.inflow, cellsFor('inflow', TIN))}
         ${secRow('Cash outflow', tout, TOUT, 'out-sec')}${treeRowsHTML(tree.outflow, cellsFor('outflow', TOUT))}
-        <tr class="net"><td>Net cashflow</td>${periods.map((p, i) => `<td class="num ${p.cur ? 'cur' : ''} ${tin[i] - tout[i] >= 0 ? 'in' : 'out'}">${money(tin[i] - tout[i], { sign: true })}</td>`).join('')}<td class="num tot-c ${TIN - TOUT >= 0 ? 'in' : 'out'}">${money(TIN - TOUT, { sign: true })}</td><td></td></tr>
+        <tr class="net"><td>Net cashflow</td>${periods.map((p, i) => `<td class="num ${p.cur ? 'cur' : ''} ${netCashFlow[i] >= 0 ? 'in' : 'out'}">${money(netCashFlow[i], { sign: true })}</td>`).join('')}<td class="num tot-c ${NET >= 0 ? 'in' : 'out'}">${money(NET, { sign: true })}</td><td></td></tr>
         <tr class="bal"><td>Closing balance</td>${balCells(closing)}</tr>
         <tr class="d0 node ${accOpen ? 'is-open' : ''}"><td><button class="tw ${accOpen ? 'open' : ''}" data-act="tree" data-k="${accNode.key}">${icon('chev')}<span>By account</span><span class="tw-n">${accNode.children.length}</span></button></td>${periods.map(() => '<td></td>').join('')}<td></td><td></td></tr>
         ${accOpen ? accNode.children.map(a => `<tr class="d1 leaf"><td><span class="tw-leaf">${esc(a.label)}</span></td>${balCells(a.vals)}</tr>`).join('') : ''}
@@ -4194,6 +4313,43 @@ PAGES.cashflow = {
       <div class="muted" style="font-size:12px;margin-top:10px">Net cash after GST and TDS. Balances include bank, FD and petty cash; transfers between them are excluded. Months that haven't started are hidden. Click a row name to expand it, or any figure to see its entries.</div>`;
   },
 };
+
+export function getCashflowSummaryUiRows(): { outflowRows: any[]; statementRows: any[] } {
+  if (typeof window === 'undefined' || !S.cf) return { outflowRows: [], statementRows: [] };
+  const previousPeriod = S.cf.period;
+  const previousGrouping = S.cf.by;
+  const previousOpen = [...OPEN];
+  const previousSeenScopes = [...SEEN_SCOPES];
+  const previousLevelRequests = { ...LEVEL_REQ };
+  try {
+    S.cf.period = 'monthly';
+    S.cf.by = 'category';
+    (window as any).__cashflowOutflowSummaryUiRows = [];
+    (window as any).__cashflowStatementUiRows = [];
+    PAGES.cashflow.render();
+    return {
+      outflowRows: (window as any).__cashflowOutflowSummaryUiRows || [],
+      statementRows: (window as any).__cashflowStatementUiRows || []
+    };
+  } finally {
+    S.cf.period = previousPeriod;
+    S.cf.by = previousGrouping;
+    OPEN.clear();
+    previousOpen.forEach(key => OPEN.add(key));
+    SEEN_SCOPES.clear();
+    previousSeenScopes.forEach(scope => SEEN_SCOPES.add(scope));
+    Object.keys(LEVEL_REQ).forEach(scope => delete LEVEL_REQ[scope]);
+    Object.assign(LEVEL_REQ, previousLevelRequests);
+  }
+}
+
+export function getCashflowOutflowSummaryUiRows(): any[] {
+  return getCashflowSummaryUiRows().outflowRows;
+}
+
+export function getCashflowStatementUiRows(): any[] {
+  return getCashflowSummaryUiRows().statementRows;
+}
 
 /* ============================ ENTRY DRAWER ============================ */
 async function openEntry(id) {
@@ -4367,7 +4523,42 @@ function catsFor(F) {
     default: return all.filter(c => c.type === F.v.type);
   }
 }
-const catSelectOptions = (list, sel) => { const groups = [...new Set(list.map(c => c.group))]; return '<option value="">Select category</option>' + groups.map(g => `<optgroup label="${esc(g)}">` + list.filter(c => c.group === g).map(c => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.name)}</option>`).join('') + '</optgroup>').join(''); };
+const PROJECT_RECEIPTS_OPTION_ID = '__project_receipts__';
+const isProjectReceiptCategory = (category) => {
+  if (!category) return false;
+  const name = String(category.name || '').toLowerCase().replace(/[–—]/g, '-').trim();
+  return category.id === 'cat_rdesign' || category.id === 'cat_reng' ||
+    /^project receipts?\s*-\s*(design|engineering)$/.test(name);
+};
+const projectReceiptCategoryForDepartment = (departmentId) => {
+  const department = nameOf('departments', departmentId).toLowerCase();
+  const isEngineering = departmentId === 'dep_eng' || department.includes('engineering');
+  const categories = api.list('categories');
+  const matchingCategory = categories.find(c =>
+    c.id === (isEngineering ? 'cat_reng' : 'cat_rdesign')
+  ) || categories.find(c => {
+    const name = String(c.name || '').toLowerCase().replace(/[–—]/g, '-').trim();
+    return isEngineering
+      ? /^project receipts?\s*-\s*engineering$/.test(name)
+      : /^project receipts?\s*-\s*design$/.test(name);
+  }) || categories.find(isProjectReceiptCategory);
+  return matchingCategory ? matchingCategory.id : (isEngineering ? 'cat_reng' : 'cat_rdesign');
+};
+const catSelectOptions = (list, sel, kind = null) => {
+  if (kind === 'client') {
+    const projectCategories = list.filter(isProjectReceiptCategory);
+    if (projectCategories.length) {
+      const representative = projectCategories.find(c => c.id === 'cat_rdesign') || projectCategories[0];
+      list = [
+        ...list.filter(c => !isProjectReceiptCategory(c)),
+        { ...representative, id: PROJECT_RECEIPTS_OPTION_ID, name: 'Project Receipts' }
+      ];
+      if (projectCategories.some(c => c.id === sel)) sel = PROJECT_RECEIPTS_OPTION_ID;
+    }
+  }
+  const groups = [...new Set(list.map(c => c.group))];
+  return '<option value="">Select category</option>' + groups.map(g => `<optgroup label="${esc(g)}">` + list.filter(c => c.group === g).map(c => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.name)}</option>`).join('') + '</optgroup>').join('');
+};
 function catForPI(pi) {
   const o = Sales.orderOfPI(pi), pr = api.get('projects', pi.projectId), has = id => !!api.get('categories', id);
   const pick = pr && /^RET/i.test(pr.code) ? 'cat_retain' : o && o.type === 'Email' ? 'cat_consult' : o && o.departmentId === 'dep_eng' ? 'cat_reng' : 'cat_rdesign';
@@ -4397,7 +4588,7 @@ function openEntryForm({ mode = 'new', entry = null, rec = null, period = null, 
   } else v = { ...base, ...preset };
   if (mode === 'template') Object.assign(v, { name: '', frequency: 'monthly', dayOfMonth: +TODAY.slice(8), startDate: TODAY, endDate: '', variable: false });
   const isTpl = mode.startsWith('template');
-  const F = { mode, v, rec, newFiles: [], removed: [], errs: {}, gstAuto: true, tdsAuto: true, deptAuto: !v.departmentId, repeat: false, rFreq: 'monthly', open: {}, more: false, emailOpen: false, allCats: false, auto: {}, billSet: !!(v.billDate && v.billDate !== v.date) };
+  const F = { mode, v, rec, newFiles: [], removed: [], errs: {}, gstAuto: true, tdsAuto: true, deptAuto: v.departmentAuto !== undefined ? Boolean(v.departmentAuto) : !v.departmentId, repeat: false, rFreq: 'monthly', open: {}, more: false, emailOpen: false, allCats: false, auto: {}, billSet: !!(v.billDate && v.billDate !== v.date) };
   F.kind = kind || ((entry || rec || preset.partyId || preset.piId || preset.type === 'transfer') ? kindOfEntry(v) : null);
   F.sub = F.kind ? subOfEntry(F.kind, v) : null;
   F.period = F.kind === 'tax' ? (/for (\w+ \d{4})/.test(v.description || '') ? null : addMonths(ymOf(v.date || TODAY), -1)) : null;
@@ -4435,11 +4626,31 @@ function openEntryForm({ mode = 'new', entry = null, rec = null, period = null, 
   draw();
   const setField = (k, val) => {
     if (['taxable', 'gstAmount', 'tdsAmount', 'amount', 'gstRate', 'tdsRate', 'dayOfMonth'].includes(k)) val = val === '' ? '' : +val;
+    if (k === 'categoryId' && F.kind === 'client' && val === PROJECT_RECEIPTS_OPTION_ID) {
+      val = projectReceiptCategoryForDepartment(v.departmentId);
+    }
     v[k] = val; let redraw = false;
     if (k === 'partyId') { const p = api.get('parties', val); if (F.kind === 'client') setClient(F, val); else if (p) applyPartyMemory(F, p); redraw = true; }
     if (k === 'categoryId') { F.auto.categoryId = false; if (F.kind === 'other_out' || F.kind === 'other_in') applyCategoryMemory(F, val); redraw = true; }
-    if (k === 'projectId') { const pr = api.get('projects', val); if (pr && F.deptAuto) { v.departmentId = pr.departmentId; F.auto.departmentId = true; } redraw = true; }
-    if (k === 'departmentId') { F.deptAuto = false; F.auto.departmentId = false; redraw = true; }
+    if (k === 'projectId') {
+      const pr = api.get('projects', val);
+      if (pr && F.deptAuto) {
+        v.departmentId = pr.departmentId;
+        F.auto.departmentId = true;
+        if (F.kind === 'client' && isProjectReceiptCategory(api.get('categories', v.categoryId))) {
+          v.categoryId = projectReceiptCategoryForDepartment(v.departmentId);
+        }
+      }
+      redraw = true;
+    }
+    if (k === 'departmentId') {
+      F.deptAuto = false;
+      F.auto.departmentId = false;
+      if (F.kind === 'client' && isProjectReceiptCategory(api.get('categories', v.categoryId))) {
+        v.categoryId = projectReceiptCategoryForDepartment(val);
+      }
+      redraw = true;
+    }
     if (k === 'gstRate') { if (+val > 0 && v.gstType === 'none') { const p = api.get('parties', v.partyId); v.gstType = p && p.gstType !== 'none' ? p.gstType : 'intra'; } if (+val === 0) v.gstType = 'none'; F.gstAuto = true; redraw = true; }
     if (k === 'tdsRate') { F.tdsAuto = true; F.rateTouched = true; redraw = true; }
     if (k === 'tdsSection') { if (typeof applyTdsSection === 'function') applyTdsSection(F, val); redraw = true; }
@@ -4591,6 +4802,14 @@ function setTaxSub(F, sub, keepAmount) {
 }
 function _setClient(F, id) {
   const v = F.v; v.partyId = id; v.partyKind = 'client'; v.piId = '';
+  const project = v.projectId && api.get('projects', v.projectId);
+  if (project && project.clientId !== id) {
+    v.projectId = '';
+    if (F.deptAuto) {
+      v.departmentId = '';
+      F.auto.departmentId = false;
+    }
+  }
   const unpaid = api.list('pis').filter(p => p.clientId === id && p.status !== 'cancelled' && Sales.piState(p).outstanding > 0);
   F.piMode = unpaid.length ? 'pi' : 'nopi';
   if (unpaid.length === 1) pickPI(F, unpaid[0].id);
@@ -4638,7 +4857,16 @@ function formBody(F) {
     ? select
     : `<div class="field"><label>${label}</label><button type="button" class="ef-chip" data-f-act="open" data-k="${key}" title="Change"><span class="ef-cn">${esc(value)}</span>${autoFlag ? '<span class="ef-auto">auto</span>' : ''}<span class="ef-chg">change</span></button></div>`;
   const deptChip = () => chip('dept', 'Department', nameOf('departments', v.departmentId), f('departmentId', 'Department *', sel('departmentId', deptOptions(v.departmentId))), F.auto.departmentId);
-  const catChip = () => chip('cat', 'Category', nameOf('categories', v.categoryId), f('categoryId', 'Category *', sel('categoryId', catSelectOptions(catsFor(F), v.categoryId)), '', `<a href="#" data-f-act="open" data-k="allcats">${F.allCats ? 'Show the usual categories' : 'Show all categories'}</a>`), F.auto.categoryId);
+  const catChip = () => {
+    const category = api.get('categories', v.categoryId);
+    const categoryName = F.kind === 'client' && isProjectReceiptCategory(category)
+      ? 'Project Receipts'
+      : nameOf('categories', v.categoryId);
+    const selectedCategory = F.kind === 'client' && isProjectReceiptCategory(category)
+      ? PROJECT_RECEIPTS_OPTION_ID
+      : v.categoryId;
+    return chip('cat', 'Category', categoryName, f('categoryId', 'Category *', sel('categoryId', catSelectOptions(catsFor(F), selectedCategory, F.kind)), '', `<a href="#" data-f-act="open" data-k="allcats">${F.allCats ? 'Show the usual categories' : 'Show all categories'}</a>`), F.auto.categoryId);
+  };
   const partySel = (kind, label, emptyLabel) => f('partyId', label + ' *', `<div class="row" style="flex-wrap:nowrap;gap:6px">${sel('partyId', partyOptions(kind, v.partyId, emptyLabel))}<button type="button" class="btn" style="padding:0 10px" title="Add new ${kind}" data-f-act="new-party">${icon('plus')}</button></div>`, '', F.remembered && v.partyId ? `Filled from the last payment on ${fmtDate(F.remembered.date)} (${money(F.remembered.amount)})` : '');
   const gstTds = (tdsLabel) => `${F.showGst ? f('gstRate', 'GST', sel('gstRate', opts(GST_RATES.map(r => [r, r + '%']), v.gstRate))) : ''}${F.showTds ? f('tdsRate', tdsLabel, sel('tdsRate', opts(TDS_RATES.map(r => [r, r + '%']), v.tdsRate))) : ''}`;
   const gstTdsLinks = (tdsLabel) => (!F.showGst || !F.showTds) ? `<div class="ef-links">${!F.showGst ? link('gst', 'Add GST') : ''}${!F.showTds ? link('tds', 'Add ' + tdsLabel) : ''}</div>` : '';
@@ -4753,6 +4981,15 @@ async function saveEntryFromForm(F) {
     await FileStore.put({ ...meta, blob: fl }); metas.push(meta);
   }
   input.attachments = [...(v.attachments || []), ...metas];
+  if (F.kind === 'other_in' && typeof window !== 'undefined' && typeof (window as any).__supabaseUploadOtherIncomeAttachments === 'function') {
+    if (!F._otherIncomeAttachmentPaths) {
+      const retainedPaths = (v.attachments || []).map((a: any) => a.storagePath || a.storage_path || a.path).filter(Boolean);
+      const newPaths = await (window as any).__supabaseUploadOtherIncomeAttachments(F.newFiles);
+      F._otherIncomeAttachmentPaths = [...retainedPaths, ...newPaths];
+    }
+    input.otherIncomeAttachmentPaths = F._otherIncomeAttachmentPaths;
+    input.departmentAuto = Boolean(F.deptAuto);
+  }
   if (F.kind === 'tax' && F.period && F.sub !== 'adv') input.taxPeriod = F.period;
   input.billDate = input.type === 'outflow' && (+input.gstRate > 0 || +input.tdsRate > 0) && input.partyKind !== 'employee' && F.kind !== 'employee' ? (input.billDate || input.date) : null;
   if (input.type === 'outflow' && +input.tdsRate > 0 && typeof tdsSectionOf === 'function') input.tdsSection = F.kind === 'employee' ? '192' : (input.tdsSection || tdsSectionOf(input) || null);
@@ -4760,7 +4997,239 @@ async function saveEntryFromForm(F) {
   const tiPI = F.kind === 'client' && F.issueTI && input.piId ? api.get('pis', input.piId) : null;
   if (tiPI && !tiPI.taxInvoiceDate) { if (typeof assertGstOpen === 'function') assertGstOpen([ymOf(input.date)], 'this invoice'); if (!F.auto || F.auto.refNo !== false || !input.refNo || input.refNo === tiPI.piNo) input.refNo = nextInvoiceNo(input.date); }
   checkEmail(F.email);
-  const saved = await api.saveEntry(input, F.mode === 'edit' ? v.id : null);
+  // Keep a locally saved vendor entry attached to this open form if its cloud
+  // insert fails, so correcting Auth and pressing Save again does not create a
+  // second local payment.
+  const saved = F._pendingCloudVendorSaved || F._pendingCloudEmployeeSaved || F._pendingCloudTaxStatutorySaved || F._pendingCloudOtherExpenseSaved || F._pendingCloudClientPaymentSaved || F._pendingCloudOtherIncomeSaved || await api.saveEntry(input, F.mode === 'edit' ? v.id : null);
+  if (F.kind === 'vendor' && typeof window !== 'undefined' && typeof (window as any).__supabaseSavePayVendorEntry === 'function') {
+    const vendor = api.get('parties', saved.partyId) || {};
+    const category = api.get('categories', saved.categoryId) || {};
+    const department = api.get('departments', saved.departmentId) || {};
+    const account = api.get('accounts', saved.accountId) || {};
+    F._pendingCloudVendorSaved = saved;
+    const cloudRow = await (window as any).__supabaseSavePayVendorEntry({
+      created_by: null,
+      recorded_by: api.me()?.name || null,
+      vendor_id: /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(vendor.supabase_id || vendor.id) ? (vendor.supabase_id || vendor.id) : null,
+      vendor_name: vendor.name || 'Unknown vendor',
+      category: category.name || 'Uncategorized',
+      department: department.name || null,
+      vendor_bank_name: vendor.bank?.bankName || vendor.bankName || null,
+      vendor_account_number: vendor.bank?.accNo || vendor.accountNumber || null,
+      vendor_ifsc: vendor.bank?.ifsc || vendor.ifsc || null,
+      credit_days: Number(vendor.creditDays) || 0,
+      bill_amount_before_gst: Number(saved.taxable) || 0,
+      bill_number: saved.refNo || null,
+      bill_date: saved.billDate || null,
+      gst_rate: Number(saved.gstRate) || 0,
+      gst_type: saved.gstType || null,
+      gst_amount: Number(saved.gstAmount) || 0,
+      input_gst_claimable: Boolean(saved.itc),
+      tds_rate: Number(saved.tdsRate) || 0,
+      tds_section: saved.tdsSection || null,
+      tds_amount: Number(saved.tdsAmount) || 0,
+      payment_date: saved.date,
+      payment_mode: saved.paymentMode || null,
+      paid_from: account.name || null,
+      utr_cheque_reference: saved.txnRef || null,
+      amount_paid: Number(saved.amount) || 0,
+      description: saved.description || null,
+      project: saved.projectId ? (api.get('projects', saved.projectId)?.name || null) : null,
+      notes: saved.notes || null,
+      repeat_enabled: Boolean(F.repeat),
+      repeat_frequency: F.repeat ? (F.rFreq || null) : null,
+      repeat_day: F.repeat ? (Number(String(saved.date || '').slice(8)) || null) : null,
+      payment_advice_enabled: Boolean(F.email?.on),
+      payment_advice_to: F.email?.on ? (F.email.to || []).join(', ') : null,
+      payment_advice_email: F.email?.on ? (F.email.to || []).join(', ') : null,
+      attachments: saved.attachments || [],
+      net_cash_paid: Number(saved.amount) || 0
+    }, saved.supabase_pay_vendor_id, saved.id);
+    if (cloudRow?.id) {
+      saved.supabase_pay_vendor_id = cloudRow.id;
+      Store.persist();
+    }
+    delete F._pendingCloudVendorSaved;
+  }
+  if (F.kind === 'employee' && typeof window !== 'undefined' && typeof (window as any).__supabaseSavePayEmployeeEntry === 'function') {
+    const employee = api.get('parties', saved.partyId) || {};
+    const project = saved.projectId ? api.get('projects', saved.projectId) : null;
+    const department = api.get('departments', saved.departmentId) || {};
+    const account = api.get('accounts', saved.accountId) || {};
+    F._pendingCloudEmployeeSaved = saved;
+    const attachment = (saved.attachments || [])[0] || {};
+    const cloudRow = await (window as any).__supabaseSavePayEmployeeEntry({
+      employee_id: /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(employee.supabase_id || employee.id) ? (employee.supabase_id || employee.id) : null,
+      employee_name: employee.name || 'Unknown employee',
+      payment_for: EMP_SUBS[F.sub] || 'Salary',
+      amount: Number(saved.amount) || 0,
+      payment_date: saved.date,
+      payment_mode: saved.paymentMode || null,
+      paid_from: account.name || '',
+      utr_cheque_ref: saved.txnRef || null,
+      description: saved.description || null,
+      reference_no: saved.refNo || null,
+      project: project?.name || null,
+      department: department.name || null,
+      notes: saved.notes || null,
+      attachment_url: attachment.url || attachment.path || attachment.storage_path || null,
+      repeat_every_cycle: Boolean(F.repeat)
+    }, saved.supabase_pay_employee_id);
+    if (cloudRow?.id) {
+      saved.supabase_pay_employee_id = cloudRow.id;
+      Store.persist();
+    }
+    delete F._pendingCloudEmployeeSaved;
+  }
+  if (F.kind === 'tax' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveTaxStatutoryEntry === 'function') {
+    const party = api.get('parties', saved.partyId) || {};
+    const category = api.get('categories', saved.categoryId) || {};
+    const department = api.get('departments', saved.departmentId) || {};
+    const account = api.get('accounts', saved.accountId) || {};
+    const attachment = (saved.attachments || [])[0] || {};
+    const taxMonth = F.sub === 'adv' ? saved.date : `${F.period || ymOf(saved.date)}-01`;
+    F._pendingCloudTaxStatutorySaved = saved;
+    const cloudRow = await (window as any).__supabaseSaveTaxStatutoryEntry({
+      paying_type: TAX_SUBS[F.sub]?.[0] || 'GST',
+      tax_month: taxMonth,
+      amount_paid: Number(saved.amount) || 0,
+      party: party.name || null,
+      category: category.name || null,
+      department: department.name || null,
+      challan_no: saved.refNo || null,
+      attachment_url: attachment.url || attachment.path || attachment.storage_path || null,
+      payment_date: saved.date,
+      payment_mode: saved.paymentMode || null,
+      paid_from: account.name || '',
+      utr_cheque_ref: saved.txnRef || null,
+      description: saved.description || null,
+      notes: saved.notes || null,
+      repeat_every_cycle: Boolean(F.repeat)
+    }, saved.supabase_tax_statutory_id);
+    if (cloudRow?.id) {
+      saved.supabase_tax_statutory_id = cloudRow.id;
+      Store.persist();
+    }
+    delete F._pendingCloudTaxStatutorySaved;
+  }
+  if (F.kind === 'other_out' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveOtherExpenseEntry === 'function') {
+    const party = api.get('parties', saved.partyId) || {};
+    const category = api.get('categories', saved.categoryId) || {};
+    const department = api.get('departments', saved.departmentId) || {};
+    const project = saved.projectId ? api.get('projects', saved.projectId) : null;
+    const account = api.get('accounts', saved.accountId) || {};
+    const attachment = (saved.attachments || [])[0] || {};
+    F._pendingCloudOtherExpenseSaved = saved;
+    const cloudRow = await (window as any).__supabaseSaveOtherExpenseEntry({
+      expense_category: category.name || '',
+      paid_to: party.name || null,
+      department: department.name || null,
+      amount_before_gst: Number(saved.taxable) || 0,
+      gst_rate: Number(saved.gstRate) || 0,
+      gst_amount: Number(saved.gstAmount) || 0,
+      tds_amount: Number(saved.tdsAmount) || 0,
+      net_cash_paid: Number(saved.amount) || 0,
+      payment_date: saved.date,
+      payment_mode: saved.paymentMode || null,
+      paid_from: account.name || '',
+      utr_cheque_ref: saved.txnRef || null,
+      attachment_url: attachment.url || attachment.path || attachment.storage_path || null,
+      description: saved.description || null,
+      reference_no: saved.refNo || null,
+      project: project?.name || null,
+      gst_type: saved.gstType || null,
+      input_gst_claimable: Boolean(saved.itc),
+      notes: saved.notes || null,
+      repeat_every_cycle: Boolean(F.repeat)
+    }, saved.supabase_other_expense_id);
+    if (cloudRow?.id) {
+      saved.supabase_other_expense_id = cloudRow.id;
+      Store.persist();
+    }
+    delete F._pendingCloudOtherExpenseSaved;
+  }
+  if (F.kind === 'client' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveClientPaymentEntry === 'function') {
+    const client = api.get('parties', saved.partyId) || {};
+    const category = api.get('categories', saved.categoryId) || {};
+    const department = api.get('departments', saved.departmentId) || {};
+    const project = saved.projectId ? api.get('projects', saved.projectId) : null;
+    const account = api.get('accounts', saved.accountId) || {};
+    const attachment = (saved.attachments || [])[0] || {};
+    F._pendingCloudClientPaymentSaved = saved;
+    const cloudRow = await (window as any).__supabaseSaveClientPaymentEntry({
+      client_name: client.name || '',
+      category: category.name || null,
+      project: project?.name || null,
+      department: department.name || null,
+      amount_before_gst: Number(saved.taxable) || 0,
+      gst_rate: Number(saved.gstRate) || 0,
+      gst_amount: Number(saved.gstAmount) || 0,
+      tds_rate: Number(saved.tdsRate) || 0,
+      tds_amount: Number(saved.tdsAmount) || 0,
+      net_cash_received: Number(saved.amount) || 0,
+      payment_date: saved.date,
+      payment_mode: saved.paymentMode || null,
+      received_into: account.name || '',
+      utr_cheque_ref: saved.txnRef || null,
+      attachment_url: attachment.url || attachment.path || attachment.storage_path || null,
+      description: saved.description || null,
+      gst_type: saved.gstType || null,
+      notes: saved.notes || null,
+      repeat_every_cycle: Boolean(F.repeat),
+      email_receipt: Boolean(F.email?.on),
+      receipt_to: F.email?.on ? (F.email.to || []).join(', ') : null,
+      receipt_cc: F.email?.on ? splitEmails(F.email.cc).join(', ') : null
+    }, saved.supabase_client_payment_id);
+    if (cloudRow?.id) {
+      saved.supabase_client_payment_id = cloudRow.id;
+      Store.persist();
+    }
+    delete F._pendingCloudClientPaymentSaved;
+  }
+  if (F.kind === 'other_in' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveOtherIncomeEntry === 'function') {
+    const party = api.get('parties', saved.partyId) || {};
+    const category = api.get('categories', saved.categoryId) || {};
+    const department = api.get('departments', saved.departmentId) || {};
+    const project = saved.projectId ? api.get('projects', saved.projectId) : null;
+    const account = api.get('accounts', saved.accountId) || {};
+    const attachmentPaths = saved.otherIncomeAttachmentPaths || [];
+    F._pendingCloudOtherIncomeSaved = saved;
+    const cloudRow = await (window as any).__supabaseSaveOtherIncomeEntry({
+      category: category.name || '',
+      received_from: party.name || null,
+      department: department.name || null,
+      department_auto: saved.departmentAuto !== undefined ? Boolean(saved.departmentAuto) : Boolean(F.deptAuto),
+      amount: Number(saved.taxable) || 0,
+      tds_percent: Number(saved.tdsRate) || 0,
+      tds_amount: Number(saved.tdsAmount) || 0,
+      net_cash_received: Number(saved.amount) || 0,
+      gst_details: JSON.stringify({ type: saved.gstType || null, rate: Number(saved.gstRate) || 0, amount: Number(saved.gstAmount) || 0 }),
+      attachment_paths: attachmentPaths,
+      payment_date: saved.date,
+      payment_mode: saved.paymentMode || null,
+      received_into: account.name || '',
+      utr_reference: saved.txnRef || null,
+      description: saved.description || null,
+      reference_no: saved.refNo || null,
+      project: project?.name || null,
+      details_department: department.name || null,
+      notes: saved.notes || null,
+      repeat_every_cycle: Boolean(F.repeat),
+      financial_year: fyLabel(S.fy)
+    }, saved.supabase_other_income_id);
+    if (cloudRow?.id) {
+      saved.supabase_other_income_id = cloudRow.id;
+      saved.otherIncomeAttachmentPaths = cloudRow.attachment_paths || attachmentPaths;
+      Store.persist();
+      const removedPaths = (F.removed || [])
+        .map((id: string) => (v.attachments || []).find((a: any) => a.id === id)?.storagePath || (v.attachments || []).find((a: any) => a.id === id)?.storage_path || (v.attachments || []).find((a: any) => a.id === id)?.path)
+        .filter(Boolean);
+      if (removedPaths.length && typeof (window as any).__supabaseDeleteOtherIncomeAttachments === 'function') {
+        await (window as any).__supabaseDeleteOtherIncomeAttachments(removedPaths);
+      }
+    }
+    delete F._pendingCloudOtherIncomeSaved;
+  }
   if (tiPI && !tiPI.taxInvoiceDate) { try { await issueTaxInvoice(tiPI.id, saved.date, saved.refNo); } catch (err) { toast('Saved, but the tax invoice was not issued: ' + err.message, 'error'); } }
   const mail = await finalizeEmail(F.email, { entity: 'entries', entityId: saved.id, docs: saved.attachments || [] }).catch(err => { toast('Saved, but the email was not queued: ' + err.message, 'error'); return null; });
   for (const id of F.removed) await FileStore.del(id).catch(() => { });
@@ -4798,25 +5267,55 @@ function quickParty(kind, cb) {
     const b = ev.target.closest('[data-x]'); if (!b) return;
     if (b.dataset.x === 'no') return ov.remove();
     const name = $('#qpName', ov).value.trim(); if (!name) return toast('Name is required', 'error');
-    const rec = { kind, name, gstin: $('#qpGstin', ov)?.value || '', gstType: $('#qpGst', ov)?.value || 'none', departmentId: $('#qpDept', ov)?.value || null, designation: '', monthlySalary: null, joinDate: null, email: '', phone: '', active: true };
+    const rec: any = { kind, name, gstin: $('#qpGstin', ov)?.value || '', gstType: $('#qpGst', ov)?.value || 'none', departmentId: $('#qpDept', ov)?.value || null, designation: '', monthlySalary: null, joinDate: null, email: '', phone: '', active: true };
     if (kind === 'employee' && !rec.departmentId) return toast('Choose a department', 'error');
-    if (kind === 'other' && typeof window !== 'undefined' && typeof (window as any).__supabaseSaveOtherParty === 'function') {
-      try {
-        const sbOp = await (window as any).__supabaseSaveOtherParty({
+    b.disabled = true;
+    try {
+      api.guard('party.create');
+      if (kind === 'employee') {
+        if (typeof window === 'undefined' || typeof (window as any).__supabaseSaveEmployee !== 'function') {
+          throw new Error('Supabase employee saving is unavailable. Please try again.');
+        }
+        const sbEmp = await (window as any).__supabaseSaveEmployee({
+          name: rec.name,
+          department: nameOf('departments', rec.departmentId) || rec.departmentId || 'Operations / Admin',
+          designation: rec.designation,
+          monthly_salary: rec.monthlySalary,
+          joined: rec.joinDate,
+          emails: rec.email,
+          phone: rec.phone,
+          is_active: rec.active
+        });
+        if (!sbEmp || !sbEmp.id) {
+          throw new Error('Employee was not saved to Supabase. Please check your connection and try again.');
+        }
+        rec.supabase_id = sbEmp.id;
+        rec.id = String(sbEmp.id);
+      }
+      if (kind === 'other') {
+        if (typeof window === 'undefined' || typeof (window as any).__supabaseSaveOtherParty !== 'function') {
+          throw new Error('Supabase other-party integration is not available. Party was not saved.');
+        }
+        const sbOtherParty = await (window as any).__supabaseSaveOtherParty({
           name: rec.name,
           gstin: rec.gstin,
           default_gst_type: rec.gstType,
-          is_active: true
+          is_active: rec.active
         });
-        if (sbOp && sbOp.id) {
-          rec.supabase_id = sbOp.id;
-          rec.id = String(sbOp.id);
+        if (!sbOtherParty || !sbOtherParty.id) {
+          throw new Error('Other party was not saved to Supabase. Please check your connection and try again.');
         }
-      } catch (e) {
-        console.warn('Supabase quickParty other save error:', e);
+        rec.supabase_id = sbOtherParty.id;
+        rec.id = String(sbOtherParty.id);
       }
+      const p = await api.create('parties', rec);
+      ov.remove();
+      toast('Added ' + name);
+      cb(p);
+    } catch (err) {
+      b.disabled = false;
+      toast(err.message, 'error');
     }
-    try { api.guard('party.create'); const p = await api.create('parties', rec); ov.remove(); toast('Added ' + name); cb(p); } catch (err) { toast(err.message, 'error'); }
   });
 }
 function afterWrite() {
@@ -5692,6 +6191,24 @@ async function resetToTestData() {
   S.fy = fyOf(TODAY);
 }
 
+function getSeedProjectMaster() {
+  const { data } = buildSeed();
+  return {
+    projects: data.projects.map(project => ({ ...project })),
+    clients: data.parties.filter(party => party.kind === 'client').map(party => ({ ...party }))
+  };
+}
+
+function getSeedOtherPartyMaster() {
+  return [
+    { id: 'ot_gst', kind: 'other', name: 'GST Department (Govt.)', gstin: '', gstType: 'none', active: true },
+    { id: 'ot_it', kind: 'other', name: 'Income Tax Department', gstin: '', gstType: 'none', active: true },
+    { id: 'ot_pt', kind: 'other', name: 'Maharashtra Profession Tax', gstin: '', gstType: 'none', active: true },
+    { id: 'ot_hdfc', kind: 'other', name: 'HDFC Bank', gstin: '27AAACH2702H1ZX', gstType: 'intra', active: true },
+    { id: 'ot_owner', kind: 'other', name: 'Owner – Capital Account', gstin: '', gstType: 'none', active: true }
+  ];
+}
+
 /* ============================ boot ============================ */
 let _globalBound = false;
 function bindGlobal() {
@@ -5735,12 +6252,13 @@ function bindGlobal() {
       if (committed) return;
       committed = true;
       const raw = inp.value.trim();
-      const newVal = raw === '' ? 0 : Number(raw);
-      if (isNaN(newVal) || newVal < 0) {
+      const newVal = raw === '' ? (isTravel ? null : 0) : Number(raw);
+      if (newVal !== null && (isNaN(newVal) || newVal < 0)) {
         td.innerHTML = origHTML;
         return;
       }
-      if (newVal === Number(initialVal)) {
+      if ((newVal === null && (initialVal === null || initialVal === undefined || initialVal === '')) ||
+        (newVal !== null && newVal === Number(initialVal))) {
         td.innerHTML = origHTML;
         return;
       }
@@ -6807,8 +7325,11 @@ function partyForm(kind, id, { quick = false, cb = null, tab = 'company', preset
       try {
         b.disabled = true;
 
-        // Step 1 & 2: Save to Supabase fss_client and fss_client_people if available
-        if (kind === 'client' && typeof (window as any).__supabaseSaveClient === 'function') {
+        // Keep clients created from the entry form in the same Supabase master.
+        if (kind === 'client') {
+          if (typeof window === 'undefined' || typeof (window as any).__supabaseSaveClient !== 'function') {
+            throw new Error('Supabase client integration is not available. Client was not saved.');
+          }
           try {
             const sbRes = await (window as any).__supabaseSaveClient(rec, contacts, {
               pan: v.pan,
@@ -6821,11 +7342,36 @@ function partyForm(kind, id, { quick = false, cb = null, tab = 'company', preset
               bank_ifsc: v.bank?.ifsc,
               bank_name: v.bank?.bankName
             });
-            if (sbRes?.client?.id) {
-              rec.id = sbRes.client.id;
-            }
+            if (!sbRes?.client?.id) throw new Error('Supabase did not return a saved client. Client was not added.');
+            rec.id = sbRes.client.id;
           } catch (sbErr: any) {
             console.error('Supabase save error:', sbErr);
+            throw new Error(`Supabase error: ${sbErr.message || sbErr}`);
+          }
+        }
+
+        // The Pay a vendor form opens this legacy quick party form. Keep it on
+        // the same Supabase source of truth as the Masters vendor form.
+        if (kind === 'vendor') {
+          if (typeof (window as any).__supabaseSaveVendor !== 'function') {
+            throw new Error('Supabase vendor integration is not available. Vendor was not saved.');
+          }
+          try {
+            const sbRes = await (window as any).__supabaseSaveVendor(rec, contacts, {
+              pan: v.pan,
+              default_gst_type: GST_TYPES[v.gstType] || v.gstType || 'No GST',
+              credit_period: v.creditDays,
+              notes: v.notes,
+              account_holder_name: v.bank?.accName,
+              account_number: v.bank?.accNo,
+              ifsc_code: v.bank?.ifsc,
+              bank_name: v.bank?.bankName,
+              upi_id: v.bank?.upi
+            });
+            if (!sbRes?.vendor?.id) throw new Error('Supabase is not configured. Vendor was not saved.');
+            rec.id = sbRes.vendor.id;
+          } catch (sbErr: any) {
+            console.error('Supabase vendor save error:', sbErr);
             throw new Error(`Supabase error: ${sbErr.message || sbErr}`);
           }
         }
@@ -8905,6 +9451,8 @@ export {
   ROLES,
   ACT,
   IC,
+  getSeedProjectMaster,
+  getSeedOtherPartyMaster,
   computeCashflowInflowRows
 };
 

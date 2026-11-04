@@ -231,6 +231,23 @@ const OFFICE_FIXED_MONTH_COLS = [
   'jan26', 'feb26', 'mar26', 'apr26', 'may26', 'jun26',
   'july26', 'aug26', 'sept26', 'oct26', 'nov26', 'dec26'
 ];
+const TRAVEL_TABLE = 'fss_outflow_travel';
+const TRAVEL_DB_MONTH_COLS: Record<string, string> = {
+  jan26: 'jan', feb26: 'feb', mar26: 'mar', apr26: 'apr', may26: 'may', jun26: 'jun',
+  july26: 'jul', aug26: 'aug', sept26: 'sep', oct26: 'oct', nov26: 'nov', dec26: 'dec'
+};
+
+function travelUiRowFromSupabase(row: any): any {
+  const uiRow: Record<string, any> = {
+    ...row,
+    category: row.category_name ?? row.category,
+    share: row.shares ?? row.share
+  };
+  for (const [uiMonth, dbMonth] of Object.entries(TRAVEL_DB_MONTH_COLS)) {
+    uiRow[uiMonth] = row[dbMonth];
+  }
+  return uiRow;
+}
 
 /** FY-to-date for an Office Fixed row = sum of month columns that fall inside the current financial year (Apr onwards). */
 function officeFixedFyToDate(row: any): number {
@@ -324,43 +341,270 @@ function recomputeOfficeVariableFyAndShares(rows: any[]): any[] {
 
 /** Recompute fy_to_date and share for travel rows. */
 function recomputeTravelFyAndShares(rows: any[]): any[] {
-  const withFy = (rows || []).map((r: any) => {
-    let fytd = 0;
-    for (const m of OFFICE_FIXED_MONTH_COLS) {
-      if (['apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].includes(m)) fytd += Number(r?.[m]) || 0;
+  const normalize = (value: any) => String(value || '').trim().toLowerCase();
+  const isGroupRow = (row: any) =>
+    Boolean(row?.isGroup) ||
+    normalize(row?.category).includes('total') ||
+    normalize(row?.category) === 'travel';
+  const sourceRows = rows || [];
+  const groupRow = sourceRows.find(isGroupRow) || { category: 'Travel Total' };
+  const childRows = sourceRows.filter((row: any) => !isGroupRow(row));
+  const updatedGroup: Record<string, any> = {
+    ...groupRow,
+    category: groupRow.category || 'Travel Total'
+  };
+
+  for (const month of OFFICE_FIXED_MONTH_COLS) {
+    const values = childRows.map((row: any) => row?.[month]);
+    if (['jan26', 'feb26', 'mar26'].includes(month) && values.every(value => value == null)) {
+      updatedGroup[month] = null;
+    } else {
+      updatedGroup[month] = Math.round(values.reduce((sum: number, value: any) =>
+        sum + (Number(value) || 0), 0) * 100) / 100;
     }
-    return { ...r, fy_to_date: Math.round(fytd * 100) / 100 };
+  }
+
+  const groupFy = OFFICE_FIXED_MONTH_COLS
+    .filter(month => !['jan26', 'feb26', 'mar26'].includes(month))
+    .reduce((sum: number, month: string) => sum + (Number(updatedGroup[month]) || 0), 0);
+  updatedGroup.fy_to_date = Math.round(groupFy * 100) / 100;
+  updatedGroup.share = 100;
+
+  const updatedChildren = childRows.map((row: any) => {
+    const fyToDate = OFFICE_FIXED_MONTH_COLS
+      .filter(month => !['jan26', 'feb26', 'mar26'].includes(month))
+      .reduce((sum: number, month: string) => sum + (Number(row?.[month]) || 0), 0);
+    const cleanFyToDate = Math.round(fyToDate * 100) / 100;
+    return {
+      ...row,
+      fy_to_date: cleanFyToDate,
+      share: groupFy > 0 ? Math.round((cleanFyToDate / groupFy) * 1000) / 10 : 0
+    };
   });
-  const isGroupRow = (r: any) => Boolean(r?.isGroup) || String(r?.category || '').trim().toLowerCase() === 'travel';
-  const subTotal = withFy.filter((r: any) => !isGroupRow(r)).reduce((s: number, r: any) => s + (Number(r.fy_to_date) || 0), 0);
-  const total = subTotal > 0 ? subTotal : withFy.reduce((s: number, r: any) => s + (Number(r.fy_to_date) || 0), 0);
-  return withFy.map((r: any) => ({
-    ...r,
-    fy_to_date: r.fy_to_date,
-    share: isGroupRow(r) ? 100 : (total > 0 ? Math.round(((Number(r.fy_to_date) || 0) / total) * 1000) / 10 : 0)
-  }));
+
+  return [updatedGroup, ...updatedChildren];
 }
 
 /** Recompute fy_to_date and share for professional & admin rows. */
 function recomputeProfessionalAdminFyAndShares(rows: any[]): any[] {
-  const withFy = (rows || []).map((r: any) => {
-    let fytd = 0;
-    for (const m of OFFICE_FIXED_MONTH_COLS) {
-      if (['apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].includes(m)) fytd += Number(r?.[m]) || 0;
+  const normalize = (value: any) => String(value || '').trim().toLowerCase();
+  const isGroupRow = (row: any) =>
+    Boolean(row?.isGroup) ||
+    normalize(row?.category).includes('total') ||
+    normalize(row?.category) === 'professional & admin';
+  const sourceRows = rows || [];
+  const groupRow = sourceRows.find(isGroupRow) || { category: 'Professional & Admin Total' };
+  const childRows = sourceRows.filter((row: any) => !isGroupRow(row));
+  const updatedGroup: Record<string, any> = {
+    ...groupRow,
+    category: groupRow.category || 'Professional & Admin Total'
+  };
+
+  for (const month of OFFICE_FIXED_MONTH_COLS) {
+    const values = childRows.map((row: any) => row?.[month]);
+    if (['jan26', 'feb26', 'mar26'].includes(month) && values.every(value => value == null)) {
+      updatedGroup[month] = null;
+    } else {
+      updatedGroup[month] = Math.round(values.reduce((sum: number, value: any) =>
+        sum + (Number(value) || 0), 0) * 100) / 100;
     }
-    return { ...r, fy_to_date: Math.round(fytd * 100) / 100 };
+  }
+
+  const fyMonths = OFFICE_FIXED_MONTH_COLS.filter(month => !['jan26', 'feb26', 'mar26'].includes(month));
+  const groupFy = fyMonths.reduce((sum: number, month: string) => sum + (Number(updatedGroup[month]) || 0), 0);
+  updatedGroup.fy_to_date = Math.round(groupFy * 100) / 100;
+  updatedGroup.share = 100;
+
+  const updatedChildren = childRows.map((row: any) => {
+    const fyToDate = fyMonths.reduce((sum: number, month: string) => sum + (Number(row?.[month]) || 0), 0);
+    const cleanFyToDate = Math.round(fyToDate * 100) / 100;
+    return {
+      ...row,
+      fy_to_date: cleanFyToDate,
+      share: groupFy > 0 ? Math.round((cleanFyToDate / groupFy) * 1000) / 10 : 0
+    };
   });
-  const isGroupRow = (r: any) => Boolean(r?.isGroup) || String(r?.category || '').trim().toLowerCase().includes('total') || String(r?.category || '').trim().toLowerCase() === 'professional & admin';
-  const subTotal = withFy.filter((r: any) => !isGroupRow(r)).reduce((s: number, r: any) => s + (Number(r.fy_to_date) || 0), 0);
-  const total = subTotal > 0 ? subTotal : withFy.reduce((s: number, r: any) => s + (Number(r.fy_to_date) || 0), 0);
-  return withFy.map((r: any) => ({
-    ...r,
-    fy_to_date: r.fy_to_date,
-    share: isGroupRow(r) ? 100 : (total > 0 ? Math.round(((Number(r.fy_to_date) || 0) / total) * 1000) / 10 : 0)
-  }));
+
+  return [updatedGroup, ...updatedChildren];
 }
 
 export const SupabaseService = {
+  async callPayVendorEdgeFunction(body: Record<string, any>): Promise<any> {
+    if (!isSupabaseConfigured) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
+    let response: Response;
+    try {
+      response = await fetch('/api/fss-pay-vendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    } catch {
+      throw new Error('Could not reach the protected Pay a Vendor development proxy. Start the app with the configured Vite dev server.');
+    }
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Pay a Vendor request failed (${response.status}).`);
+    return result.data;
+  },
+  async savePayVendorEntry(payload: Record<string, any>, rowId?: string, idempotencyKey?: string): Promise<any> {
+    return this.callPayVendorEdgeFunction({
+      operation: rowId ? 'update' : 'insert',
+      id: rowId,
+      idempotency_key: idempotencyKey,
+      data: payload
+    });
+  },
+  async loadPayVendorEntries(id?: string): Promise<any[]> {
+    const data = await this.callPayVendorEdgeFunction({ operation: 'select', id });
+    return Array.isArray(data) ? data : data ? [data] : [];
+  },
+  async updatePayVendorEntry(id: string, payload: Record<string, any>): Promise<any> {
+    return this.callPayVendorEdgeFunction({ operation: 'update', id, data: payload });
+  },
+  async deletePayVendorEntry(id: string): Promise<void> {
+    await this.callPayVendorEdgeFunction({ operation: 'delete', id });
+  },
+
+  async savePayEmployeeEntry(payload: Record<string, any>, rowId?: string): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
+
+    const result = rowId
+      ? await supabase
+        .from('fss_form_pay_an_employee')
+        .update({ ...payload, updated_at: new Date().toISOString() })
+        .eq('id', rowId)
+        .select()
+        .single()
+      : await supabase
+        .from('fss_form_pay_an_employee')
+        .insert(payload)
+        .select()
+        .single();
+
+    if (result.error) throw result.error;
+    return result.data;
+  },
+
+  async saveTaxStatutoryEntry(payload: Record<string, any>, rowId?: string): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
+    const result = rowId
+      ? await supabase.from('fss_form_tax_statutory')
+        .update({ ...payload, updated_at: new Date().toISOString() })
+        .eq('id', rowId).select().single()
+      : await supabase.from('fss_form_tax_statutory').insert(payload).select().single();
+    if (result.error) throw result.error;
+    return result.data;
+  },
+
+  async loadTaxStatutoryEntries(): Promise<any[]> {
+    if (!supabase) return [];
+    const { data, error } = await supabase.from('fss_form_tax_statutory').select('*').order('payment_date', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async deleteTaxStatutoryEntry(rowId: string): Promise<void> {
+    if (!supabase) return;
+    const { error } = await supabase.from('fss_form_tax_statutory').delete().eq('id', rowId);
+    if (error) throw error;
+  },
+
+  async saveOtherExpenseEntry(payload: Record<string, any>, rowId?: string): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
+    const result = rowId
+      ? await supabase.from('fss_form_other_expense')
+        .update({ ...payload, updated_at: new Date().toISOString() })
+        .eq('id', rowId).select().single()
+      : await supabase.from('fss_form_other_expense').insert(payload).select().single();
+    if (result.error) throw result.error;
+    return result.data;
+  },
+
+  async loadOtherExpenseEntries(): Promise<any[]> {
+    if (!supabase) return [];
+    const { data, error } = await supabase.from('fss_form_other_expense').select('*').order('payment_date', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async deleteOtherExpenseEntry(rowId: string): Promise<void> {
+    if (!supabase) return;
+    const { error } = await supabase.from('fss_form_other_expense').delete().eq('id', rowId);
+    if (error) throw error;
+  },
+
+  async saveClientPaymentEntry(payload: Record<string, any>, rowId?: string): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
+    const result = rowId
+      ? await supabase.from('fss_form_client_payment')
+        .update({ ...payload, updated_at: new Date().toISOString() })
+        .eq('id', rowId).select().single()
+      : await supabase.from('fss_form_client_payment').insert(payload).select().single();
+    if (result.error) throw result.error;
+    return result.data;
+  },
+
+  async loadClientPaymentEntries(): Promise<any[]> {
+    if (!supabase) return [];
+    const { data, error } = await supabase.from('fss_form_client_payment').select('*').order('payment_date', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async deleteClientPaymentEntry(rowId: string): Promise<void> {
+    if (!supabase) return;
+    const { error } = await supabase.from('fss_form_client_payment').delete().eq('id', rowId);
+    if (error) throw error;
+  },
+
+  async uploadOtherIncomeAttachments(files: File[]): Promise<string[]> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const paths: string[] = [];
+    for (const file of files || []) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `${globalThis.crypto.randomUUID()}-${safeName}`;
+      const { error } = await supabase.storage.from('fss-other-income').upload(path, file, {
+        upsert: false,
+        contentType: file.type || undefined
+      });
+      if (error) throw error;
+      paths.push(path);
+    }
+    return paths;
+  },
+
+  async deleteOtherIncomeAttachments(paths: string[]): Promise<void> {
+    if (!supabase || !paths.length) return;
+    const { error } = await supabase.storage.from('fss-other-income').remove(paths);
+    if (error) throw error;
+  },
+
+  async saveOtherIncomeEntry(payload: Record<string, any>, rowId?: string): Promise<any> {
+    if (!supabase) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
+    const result = rowId
+      ? await supabase.from('fss_form_other_income')
+        .update({ ...payload, updated_at: new Date().toISOString() })
+        .eq('id', rowId).select().single()
+      : await supabase.from('fss_form_other_income').insert(payload).select().single();
+    if (result.error) throw result.error;
+    return result.data;
+  },
+
+  async loadOtherIncomeEntries(): Promise<any[]> {
+    if (!supabase) return [];
+    const { data, error } = await supabase.from('fss_form_other_income').select('*').order('payment_date', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async deleteOtherIncomeEntry(rowId: string): Promise<void> {
+    if (!supabase) return;
+    const { data: row, error: loadError } = await supabase.from('fss_form_other_income').select('attachment_paths').eq('id', rowId).maybeSingle();
+    if (loadError) throw loadError;
+    const paths = Array.isArray(row?.attachment_paths) ? row.attachment_paths : [];
+    if (paths.length) await this.deleteOtherIncomeAttachments(paths);
+    const { error } = await supabase.from('fss_form_other_income').delete().eq('id', rowId);
+    if (error) throw error;
+  },
   isConfigured(): boolean {
     return isSupabaseConfigured;
   },
@@ -643,9 +887,8 @@ export const SupabaseService = {
         .select()
         .single();
 
-      if (!updateErr && updated) {
-        vendor = updated;
-      }
+      if (updateErr) throw new Error(`Failed to update vendor: ${updateErr.message}`);
+      if (updated) vendor = updated;
     }
 
     // 2. Otherwise insert new vendor row
@@ -671,7 +914,8 @@ export const SupabaseService = {
 
     // 3. Sync contact personnel in fss_vendor_people
     if (isExistingUuid) {
-      await supabase.from('fss_vendor_people').delete().eq('vendor_id', vendor.id);
+      const { error: deletePeopleError } = await supabase.from('fss_vendor_people').delete().eq('vendor_id', vendor.id);
+      if (deletePeopleError) throw new Error(`Failed to update vendor contacts: ${deletePeopleError.message}`);
     }
 
     if (peopleArray && peopleArray.length > 0) {
@@ -697,9 +941,9 @@ export const SupabaseService = {
 
         if (peopleError) {
           console.error('fss_vendor_people insert error:', peopleError);
-        } else {
-          insertedPeople = pData || [];
+          throw new Error(`Failed to save vendor contacts: ${peopleError.message}`);
         }
+        insertedPeople = pData || [];
       }
     }
 
@@ -719,7 +963,7 @@ export const SupabaseService = {
 
       if (vendorErr) {
         console.warn('Error fetching fss_vendor:', vendorErr.message);
-        return [];
+        throw new Error(`Failed to load vendors from Supabase: ${vendorErr.message}`);
       }
       if (!vendors || !vendors.length) return [];
 
@@ -728,7 +972,7 @@ export const SupabaseService = {
         .select('*');
 
       if (peopleErr) {
-        console.warn('Error fetching fss_vendor_people:', peopleErr.message);
+        throw new Error(`Failed to load vendor contacts from Supabase: ${peopleErr.message}`);
       }
 
       const peopleByVendor: Record<string, any[]> = {};
@@ -743,7 +987,7 @@ export const SupabaseService = {
       }));
     } catch (err) {
       console.error('Error in loadVendorsFromSupabase:', err);
-      return [];
+      throw err;
     }
   },
 
@@ -1119,6 +1363,45 @@ export const SupabaseService = {
   },
 
   /**
+   * Ensures the standard other-party records from the supplied master exist in Supabase.
+   */
+  async syncSeedOtherPartiesToSupabase(seedParties: any[], localParties: any[] = []): Promise<any[]> {
+    if (!supabase) {
+      throw new Error('Supabase is not configured. Please check your .env configuration.');
+    }
+
+    const { data: existing, error } = await supabase
+      .from('fss_other_parties')
+      .select('*');
+    if (error) throw new Error(`Failed to load other parties before syncing: ${error.message}`);
+
+    const existingByName = new Map(
+      (existing || []).map((party: any) => [String(party.name || '').trim().toLowerCase(), party])
+    );
+    const saved: any[] = [];
+    for (const party of seedParties || []) {
+      const name = String(party.name || '').trim();
+      if (!name) continue;
+      const existingParty = existingByName.get(name.toLowerCase());
+      const localParty = (localParties || []).find((item: any) =>
+        item.kind === 'other' && String(item.name || '').trim().toLowerCase() === name.toLowerCase()
+      );
+      const record = await this.saveOtherParty({
+        supabase_id: existingParty?.id || localParty?.supabase_id,
+        name,
+        gstin: party.gstin || '',
+        default_gst_type: party.gstType || 'none',
+        emails: party.email ?? existingParty?.emails ?? localParty?.email ?? '',
+        phone: party.phone ?? existingParty?.phone ?? localParty?.phone ?? '',
+        is_active: party.active !== false
+      });
+      saved.push(record);
+      existingByName.set(name.toLowerCase(), record);
+    }
+    return saved;
+  },
+
+  /**
    * Saves or updates a project in fss_projects
    */
   async saveProject(
@@ -1354,6 +1637,86 @@ export const SupabaseService = {
       }
     }
     return syncedProjects;
+  },
+
+  /**
+   * Replaces the Supabase project master with the supplied canonical project list.
+   */
+  async replaceProjectMasterFromSeed(
+    masterProjects: any[],
+    masterClients: any[],
+    localParties: any[] = [],
+    departments: any[] = []
+  ): Promise<any[]> {
+    if (!supabase) {
+      throw new Error('Supabase is not configured. Please check your .env configuration.');
+    }
+
+    const projects = (masterProjects || []).filter((project: any) =>
+      (project.code || project.project_code) && (project.name || project.project_name)
+    );
+    const canonicalCodes = new Set<string>();
+    projects.forEach((project: any) => {
+      const code = String(project.code || project.project_code).trim().toLowerCase();
+      if (canonicalCodes.has(code)) throw new Error(`The canonical project list contains duplicate code "${code}".`);
+      canonicalCodes.add(code);
+    });
+
+    const { data: existingProjects, error: existingErr } = await supabase
+      .from('fss_projects')
+      .select('*');
+    if (existingErr) throw new Error(`Failed to load projects before replacement: ${existingErr.message}`);
+
+    const existingByCode = new Map<string, any[]>();
+    (existingProjects || []).forEach((project: any) => {
+      const code = String(project.project_code || '').trim().toLowerCase();
+      if (!existingByCode.has(code)) existingByCode.set(code, []);
+      existingByCode.get(code)!.push(project);
+    });
+
+    const departmentNames = new Map((departments || []).map((department: any) => [department.id, department.name]));
+    const savedProjects: any[] = [];
+    for (const project of projects) {
+      const code = String(project.code || project.project_code).trim();
+      const sourceClient = (masterClients || []).find((client: any) => client.id === project.clientId);
+      if (!sourceClient) throw new Error(`Project ${code} does not have a client in the canonical client list.`);
+      const localClient = (localParties || []).find((party: any) =>
+        party.kind === 'client' &&
+        String(party.name || '').trim().toLowerCase() === String(sourceClient.name || '').trim().toLowerCase()
+      );
+      if (!localClient) throw new Error(`Cannot find client "${sourceClient.name}" in the current client master for project ${code}.`);
+
+      const matchedRows = existingByCode.get(code.toLowerCase()) || [];
+      const saved = await this.saveProject({
+        supabase_id: matchedRows[0]?.id,
+        project_code: code,
+        project_name: project.name || project.project_name,
+        client_id: localClient.id,
+        department: departmentNames.get(project.departmentId) || project.departmentId || 'Design',
+        contract_value: project.contractValue ?? project.contract_value ?? 0,
+        start_date: project.startDate || project.start_date || null,
+        status: project.status || 'Active'
+      }, localParties);
+      savedProjects.push(saved);
+    }
+
+    const savedIds = new Set(savedProjects.map((project: any) => String(project.id)));
+    for (const project of existingProjects || []) {
+      if (savedIds.has(String(project.id))) continue;
+      const { error } = await supabase.from('fss_projects').delete().eq('id', project.id);
+      if (error) throw new Error(`Failed to delete project "${project.project_code || project.id}": ${error.message}`);
+    }
+
+    const { data: reconciledProjects, error: reconcileErr } = await supabase
+      .from('fss_projects')
+      .select('*')
+      .order('project_code', { ascending: true });
+    if (reconcileErr) throw new Error(`Failed to verify the replaced project master: ${reconcileErr.message}`);
+    const finalCodes = (reconciledProjects || []).map((project: any) => String(project.project_code || '').trim().toLowerCase());
+    if (finalCodes.length !== canonicalCodes.size || finalCodes.some((code: string) => !canonicalCodes.has(code))) {
+      throw new Error(`Project master replacement verification failed: expected ${canonicalCodes.size} projects, found ${finalCodes.length}.`);
+    }
+    return reconciledProjects || [];
   },
 
   /**
@@ -4020,10 +4383,11 @@ export const SupabaseService = {
       'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
     ];
 
-    const { data: existing } = await supabase
+    const { data: existing, error: existingErr } = await supabase
       .from('fss_outflow_oc_people')
       .select('*')
       .ilike('category', trimmed);
+    if (existingErr) throw existingErr;
 
     if (existing && existing.length > 0) {
       const ex = existing[0];
@@ -4077,65 +4441,81 @@ export const SupabaseService = {
   }> {
     if (!supabase) throw new Error('Supabase is not configured.');
 
-    try {
-      const computedNames = new Set((peopleRows || []).map((r: any) => String(r.category || '').trim().toLowerCase()));
-      const { data: existingRows } = await supabase.from('fss_outflow_oc_people').select('id, category');
-      for (const er of existingRows || []) {
-        if (!computedNames.has(String(er.category || '').trim().toLowerCase())) {
-          await supabase.from('fss_outflow_oc_people').delete().eq('id', er.id);
-        }
-      }
-    } catch (e) { console.warn('Stale cleanup failed for people:', e); }
+    const tableName = 'fss_outflow_oc_people';
+    const monthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+    const normalizeCategory = (value: any) => String(value || '').trim().toLowerCase();
+    const desiredRows = (peopleRows || []).filter((row: any) => normalizeCategory(row.category));
+    const desiredNames = new Set(desiredRows.map((row: any) => normalizeCategory(row.category)));
+    const { data: existingRows, error: loadError } = await supabase.from(tableName).select('*');
+    if (loadError) throw loadError;
 
-    for (const row of peopleRows) {
-      const payload = { ...row };
-      delete payload.created_at;
-      delete payload.fy_to_date;
-      delete payload.share_pct;
-      const rowId = payload.id;
-      delete payload.id;
-
-      // Resolve the stable category identifier first so we never create duplicate category records.
-      let target: any = null;
-      if (rowId) {
-        const { data: byId, error: byIdErr } = await supabase
-          .from('fss_outflow_oc_people')
-          .select('*')
-          .eq('id', rowId);
-        if (byIdErr) throw byIdErr;
-        target = byId && byId.length > 0 ? byId[0] : null;
-      }
-      if (!target) {
-        const { data: byCat, error: byCatErr } = await supabase
-          .from('fss_outflow_oc_people')
-          .select('*')
-          .ilike('category', String(payload.category || ''));
-        if (byCatErr) throw byCatErr;
-        target = byCat && byCat.length > 0 ? byCat[0] : null;
-      }
-
-      if (target) {
-        const { error: updErr } = await supabase
-          .from('fss_outflow_oc_people')
-          .update(payload)
-          .eq('id', target.id);
-        if (updErr) {
-          console.error('Error updating fss_outflow_oc_people record:', updErr);
-        }
-      } else {
-        const { error: insErr } = await supabase
-          .from('fss_outflow_oc_people')
-          .insert(payload);
-        if (insErr) {
-          console.error('Error inserting new people row:', insErr);
+    for (const existing of existingRows || []) {
+      if (!desiredNames.has(normalizeCategory(existing.category))) {
+        const { error } = await supabase.from(tableName).delete().eq('id', existing.id);
+        if (error) {
+          console.error(`Error deleting stale People row "${existing.category}":`, error);
+          throw error;
         }
       }
     }
 
-    const [people, peopleReport] = await Promise.all([
-      this.loadPeopleFromSupabase(),
-      this.loadPeopleReportFromSupabase()
+    for (const row of desiredRows) {
+      const category = String(row.category).trim();
+      const payload: Record<string, any> = { category };
+      for (const month of monthCols) {
+        const value = Number(row[month] ?? 0);
+        if (!Number.isFinite(value)) {
+          throw new Error(`Invalid ${month} value for People row "${category}".`);
+        }
+        payload[month] = Math.round(value * 100) / 100;
+      }
+
+      const existing = (existingRows || []).find((item: any) =>
+        normalizeCategory(item.category) === normalizeCategory(category)
+      );
+      const result = existing
+        ? await supabase.from(tableName).update(payload).eq('id', existing.id)
+        : await supabase.from(tableName).insert(payload);
+      if (result.error) {
+        console.error(`Error saving People row "${category}" to Supabase:`, result.error);
+        throw result.error;
+      }
+    }
+
+    const [
+      { data: people, error: verifyPeopleError },
+      { data: peopleReport, error: verifyReportError }
+    ] = await Promise.all([
+      supabase.from(tableName).select('*'),
+      supabase.from('fss_outflow_oc_people_report').select('*')
     ]);
+    if (verifyPeopleError) throw verifyPeopleError;
+    if (verifyReportError) throw verifyReportError;
+
+    for (const row of desiredRows) {
+      const persisted = (people || []).find((item: any) =>
+        normalizeCategory(item.category) === normalizeCategory(row.category)
+      );
+      const reported = (peopleReport || []).find((item: any) =>
+        normalizeCategory(item.category) === normalizeCategory(row.category)
+      );
+      if (!persisted || !reported) {
+        throw new Error(`People row "${row.category}" is missing from the base table or report view after sync.`);
+      }
+      for (const month of monthCols) {
+        const expected = Math.round(Number(row[month] ?? 0) * 100) / 100;
+        if (Math.round(Number(persisted[month] ?? 0) * 100) / 100 !== expected) {
+          throw new Error(`People row "${row.category}" did not persist the expected ${month} value.`);
+        }
+        if (Math.round(Number(reported[month] ?? 0) * 100) / 100 !== expected) {
+          throw new Error(`People report row "${row.category}" does not match ${month} in the base table.`);
+        }
+      }
+    }
+
     return { people, peopleReport };
   },
 
@@ -4366,6 +4746,54 @@ export const SupabaseService = {
     return { projectCost: allRows };
   },
 
+  /** Keep the secondary Project Costs table as a mirror of the UI-computed rows. */
+  async syncProjectCost2ToSupabase(projectCostRows: any[]): Promise<any[]> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+
+    const rows = recomputeProjectCostFyAndShares(projectCostRows || []);
+    const normalized = rows
+      .map((row: any) => ({
+        ...row,
+        category: String(row.category || '').trim().toLowerCase() === 'project costs'
+          ? 'Project Costs Total'
+          : String(row.category || '').trim()
+      }))
+      .filter((row: any) => row.category);
+    const categoryKey = (category: any) => String(category || '').trim().toLowerCase();
+    const wanted = new Set(normalized.map((row: any) => categoryKey(row.category)));
+
+    const { data: existingRows, error: loadError } = await supabase
+      .from('fss_outflow_project_cost_2')
+      .select('id, category');
+    if (loadError) throw loadError;
+
+    for (const existing of existingRows || []) {
+      if (!wanted.has(categoryKey(existing.category))) {
+        const { error } = await supabase.from('fss_outflow_project_cost_2').delete().eq('id', existing.id);
+        if (error) throw error;
+      }
+    }
+
+    for (const row of normalized) {
+      const payload: Record<string, any> = { category: row.category };
+      for (const month of PROJECT_COST_MONTH_COLS) {
+        const value = Number(row[month]);
+        payload[month] = Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
+      }
+
+      const existing = (existingRows || []).find((item: any) => categoryKey(item.category) === categoryKey(row.category));
+      const query = existing
+        ? supabase.from('fss_outflow_project_cost_2').update(payload).eq('id', existing.id)
+        : supabase.from('fss_outflow_project_cost_2').insert(payload);
+      const { error } = await query;
+      if (error) throw error;
+    }
+
+    const { data, error } = await supabase.from('fss_outflow_project_cost_2').select('*').order('id');
+    if (error) throw error;
+    return data || [];
+  },
+
   /**
    * Loads all rows from public.fss_outflow_capex (FSS Outflow - Capex)
    */
@@ -4588,6 +5016,53 @@ export const SupabaseService = {
     return { capex: allRows };
   },
 
+  /** Syncs the same UI Capex rows into the secondary fss_outflow_capex_2 table. */
+  async syncCapex2ToSupabase(capexRows: any[]): Promise<any[]> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const rows = recomputeCapexFyAndShares(capexRows || []).map((row: any) => ({
+      ...row,
+      category: String(row.category || '').trim().toLowerCase() === 'capex' ? 'Capex Total' : row.category
+    }));
+    const normalizeCategory = (category: any) => String(category || '').trim().toLowerCase();
+    const { data: existingRows, error: existingErr } = await supabase
+      .from('fss_outflow_capex_2')
+      .select('id, category');
+    if (existingErr) throw existingErr;
+
+    const computedNames = new Set(rows.map((row: any) => normalizeCategory(row.category)));
+    for (const existing of existingRows || []) {
+      if (!computedNames.has(normalizeCategory(existing.category))) {
+        const { error } = await supabase.from('fss_outflow_capex_2').delete().eq('id', existing.id);
+        if (error) throw error;
+      }
+    }
+
+    for (const row of rows) {
+      const category = String(row.category || '').trim();
+      if (!category) continue;
+      const payload: Record<string, any> = { category };
+      for (const month of CAPEX_MONTH_COLS) {
+        payload[month] = row[month] == null ? null : Math.round(Number(row[month] || 0) * 100) / 100;
+      }
+      const { data: existing, error: selectErr } = await supabase
+        .from('fss_outflow_capex_2')
+        .select('id, category')
+        .ilike('category', category);
+      if (selectErr) throw selectErr;
+      if (existing && existing.length > 0) {
+        const { error } = await supabase.from('fss_outflow_capex_2').update(payload).eq('id', existing[0].id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('fss_outflow_capex_2').insert(payload);
+        if (error) throw error;
+      }
+    }
+
+    const { data: allRows, error: loadErr } = await supabase.from('fss_outflow_capex_2').select('*').order('category', { ascending: true });
+    if (loadErr) throw loadErr;
+    return allRows || [];
+  },
+
   /**
    * Loads all rows from public.fss_outflow_financing_and_owner (FSS Outflow - Financing & owner)
    */
@@ -4738,69 +5213,85 @@ export const SupabaseService = {
     if (!supabase) throw new Error('Supabase is not configured.');
 
     const rows = recomputeFinancingOwnerFyAndShares(financingAndOwnerRows || []);
-    const synced: any[] = [];
+    const normalize = (value: any) => String(value || '').trim().toLowerCase();
+    const { data: existingRows, error: loadError } = await supabase
+      .from('fss_outflow_financing_and_owner')
+      .select('*');
+    if (loadError) throw loadError;
 
-    // Remove stale rows that are no longer in the computed set
-    try {
-      const computedNames = new Set(rows.map((r: any) => String(r.category || '').trim().toLowerCase()));
-      const { data: existingRows } = await supabase
-        .from('fss_outflow_financing_and_owner')
-        .select('id, category');
-      for (const er of existingRows || []) {
-        if (!computedNames.has(String(er.category || '').trim().toLowerCase())) {
-          await supabase.from('fss_outflow_financing_and_owner').delete().eq('id', er.id);
-        }
-      }
-    } catch (e) {
-      console.warn('Stale cleanup failed for financing_and_owner:', e);
+    const desiredRows = new Map<string, any>();
+    for (const row of rows) {
+      const category = String(row.category || '').trim();
+      if (category) desiredRows.set(normalize(category), { ...row, category });
+    }
+    const existingByCategory = new Map<string, any[]>();
+    for (const row of existingRows || []) {
+      const key = normalize(row.category);
+      existingByCategory.set(key, [...(existingByCategory.get(key) || []), row]);
     }
 
-    for (const row of rows) {
-      const category = (row.category || '').trim();
-      if (!category) continue;
+    // Remove deleted UI categories and duplicate cloud rows. Match by category
+    // rather than requiring an `id` column in this legacy table.
+    for (const [key, matches] of existingByCategory) {
+      if (!desiredRows.has(key) || matches.length > 1) {
+        const categories = [...new Set(matches.map((row: any) => String(row.category || '')))];
+        for (const category of categories) {
+          const { error } = await supabase
+            .from('fss_outflow_financing_and_owner')
+            .delete()
+            .eq('category', category);
+          if (error) throw error;
+        }
+      }
+    }
+
+    const nullableNumber = (value: any): number | null => {
+      if (value === null || value === undefined || String(value).trim() === '') return null;
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) throw new Error(`Invalid Financing & Owner numeric value: ${value}`);
+      return Math.round(numeric * 100) / 100;
+    };
+
+    for (const [key, row] of desiredRows) {
+      const category = row.category;
       const payload: Record<string, any> = { category };
       for (const m of FINANCING_OWNER_MONTH_COLS) {
-        const v = row[m];
-        payload[m] = (v === null || v === undefined) ? null : Math.round(Number(v || 0) * 100) / 100;
+        payload[m] = nullableNumber(row[m]);
       }
-      payload.fy_to_date = row.fy_to_date === null || row.fy_to_date === undefined ? financingOwnerFyToDate(row) : Number(row.fy_to_date);
-      payload.shares = Number(row.shares || 0);
+      payload.fy_to_date = nullableNumber(row.fy_to_date ?? financingOwnerFyToDate(row));
+      payload.shares = nullableNumber(row.shares);
 
-      const { data: existing, error: selErr } = await supabase
-        .from('fss_outflow_financing_and_owner')
-        .select('*')
-        .ilike('category', category);
-      if (selErr) throw selErr;
-
-      if (existing && existing.length > 0) {
-        const ex = existing[0];
-        payload.category = ex.category;
-        const { error: updErr } = await supabase
+      const matches = existingByCategory.get(key) || [];
+      const existing = matches.length === 1 && desiredRows.has(key) ? matches[0] : null;
+      const result = existing
+        ? await supabase
           .from('fss_outflow_financing_and_owner')
           .update(payload)
-          .eq('category', ex.category);
-        if (updErr) throw updErr;
-      } else {
-        const { error: insErr } = await supabase
-          .from('fss_outflow_financing_and_owner')
-          .insert(payload);
-        if (insErr) throw insErr;
-      }
-      synced.push(row);
+          .eq('category', existing.category)
+        : await supabase.from('fss_outflow_financing_and_owner').insert(payload);
+      if (result.error) throw result.error;
     }
 
     const allRows = await this.loadFinancingAndOwnerFromSupabase();
-    const loadedByCategory = new Map(
-      allRows.map((row: any) => [String(row.category || '').trim().toLowerCase(), row])
-    );
-    for (const row of rows) {
-      const category = String(row.category || '').trim();
-      const loaded = loadedByCategory.get(category.toLowerCase());
+    const loadedByCategory = new Map<string, any[]>();
+    for (const row of allRows) {
+      const key = normalize(row.category);
+      loadedByCategory.set(key, [...(loadedByCategory.get(key) || []), row]);
+    }
+    for (const [key, row] of desiredRows) {
+      const category = row.category;
+      const matches = loadedByCategory.get(key) || [];
+      if (matches.length !== 1) {
+        throw new Error(`Financing & Owner row "${category}" was not uniquely reloaded from Supabase.`);
+      }
+      const loaded = matches[0];
       if (!loaded) {
         throw new Error(`Financing & Owner row "${category}" was not reloaded from Supabase.`);
       }
       for (const month of FINANCING_OWNER_MONTH_COLS) {
-        if (Number(loaded[month] || 0) !== Number(row[month] || 0)) {
+        const expectedValue = nullableNumber(row[month]);
+        const loadedValue = nullableNumber(loaded[month]);
+        if (expectedValue !== loadedValue) {
           throw new Error(`Financing & Owner value for "${category}" (${month}) did not match Supabase.`);
         }
       }
@@ -5190,85 +5681,103 @@ export const SupabaseService = {
 
   async loadTravelFromSupabase(): Promise<any[]> {
     if (!supabase) return [];
-    try {
-      const { data, error } = await supabase
-        .from('fss_outflow_oc_travel')
-        .select('*')
-        .order('id', { ascending: true });
-      if (error) {
-        console.error('Error loading fss_outflow_oc_travel from Supabase:', error);
-        return [];
-      }
-      return recomputeTravelFyAndShares(data || []);
-    } catch (err) {
-      console.error('Exception loading fss_outflow_oc_travel from Supabase:', err);
-      return [];
+    const { data, error } = await supabase
+      .from(TRAVEL_TABLE)
+      .select('*')
+      .order('id', { ascending: true });
+    if (error) {
+      console.error('Error loading fss_outflow_oc_travel from Supabase:', error);
+      throw error;
     }
+    return recomputeTravelFyAndShares((data || []).map(travelUiRowFromSupabase));
   },
 
   async syncTravelToSupabase(travelRows: any[]): Promise<{ travel: any[] }> {
     if (!supabase) throw new Error('Supabase is not configured.');
     const rows = recomputeTravelFyAndShares(travelRows || []);
-    try {
-      const computedNames = new Set(rows.map((r: any) => String(r.category || '').trim().toLowerCase()));
-      const { data: existingRows } = await supabase.from('fss_outflow_oc_travel').select('id, category');
-      for (const er of existingRows || []) {
-        if (!computedNames.has(String(er.category || '').trim().toLowerCase())) {
-          const { error } = await supabase.from('fss_outflow_oc_travel').delete().eq('id', er.id);
-          if (error) throw error;
-        }
-      }
-    } catch (e) { console.warn('Stale cleanup failed for travel:', e); }
-    for (const row of rows) {
-      const categoryName = (row.category || '').trim();
-      if (!categoryName) continue;
-      const payload: Record<string, any> = { category: categoryName };
-      for (const m of OFFICE_FIXED_MONTH_COLS) {
-        if (['jan26', 'feb26', 'mar26'].includes(m)) {
-          payload[m] = null;
-        } else {
-          const v = row[m];
-          payload[m] = (v === null || v === undefined || isNaN(Number(v))) ? 0 : Math.round(Number(v) * 100) / 100;
-        }
-      }
-      payload.fy_to_date = row.fy_to_date === null || row.fy_to_date === undefined ? null : Number(row.fy_to_date);
-      payload.share = Number(row.share || 0);
+    const categoryKey = (value: any) => {
+      const normalized = String(value || '').trim().toLowerCase();
+      return normalized.includes('total') || normalized === 'travel' ? '__travel_total' : normalized;
+    };
+    const { data: existingRows, error: existingError } = await supabase
+      .from(TRAVEL_TABLE)
+      .select('*');
+    if (existingError) throw existingError;
+    const existingByCategory = new Map<string, any[]>();
+    for (const existing of existingRows || []) {
+      const key = categoryKey(existing.category_name ?? existing.category);
+      existingByCategory.set(key, [...(existingByCategory.get(key) || []), existing]);
+    }
+    const expectedRows = new Map<string, any>();
+    const keptIds = new Set<number | string>();
+    const nullableNumber = (value: any): number | null => {
+      if (value === null || value === undefined || String(value).trim() === '') return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? Math.round(numeric * 100) / 100 : null;
+    };
 
-      const { data: existing, error: lookupError } = await supabase
-        .from('fss_outflow_oc_travel')
-        .select('*')
-        .ilike('category', categoryName);
-      if (lookupError) throw lookupError;
-      let existingRowsForCategory = existing;
-      if ((!existingRowsForCategory || existingRowsForCategory.length === 0) && (categoryName.toLowerCase().includes('total') || categoryName.toLowerCase() === 'travel')) {
-        const alt = await supabase
-          .from('fss_outflow_oc_travel')
-          .select('*')
-          .or('category.ilike.Travel Total,category.ilike.Travel');
-        if (alt.error) throw alt.error;
-        if (alt.data && alt.data.length > 0) existingRowsForCategory = alt.data;
+    for (const row of rows) {
+      const categoryName = (row.category || row.category_name || '').trim();
+      if (!categoryName) continue;
+      const key = categoryKey(categoryName);
+      const existing = existingByCategory.get(key) || [];
+      const current = existing[0];
+      const payload: Record<string, any> = {
+        category_name: current?.category_name || current?.category || categoryName,
+        fy_to_date: nullableNumber(row.fy_to_date),
+        shares: nullableNumber(row.share ?? row.shares)
+      };
+      for (const [uiMonth, dbMonth] of Object.entries(TRAVEL_DB_MONTH_COLS)) {
+        payload[dbMonth] = nullableNumber(row[uiMonth]);
       }
-      if (existingRowsForCategory && existingRowsForCategory.length > 0) {
-        const ex = existingRowsForCategory[0];
-        payload.category = ex.category;
-        const { error } = await supabase.from('fss_outflow_oc_travel').update(payload).eq('id', ex.id);
+
+      if (current) {
+        const { data: updated, error } = await supabase
+          .from(TRAVEL_TABLE)
+          .update(payload)
+          .eq('id', current.id)
+          .select('id')
+          .maybeSingle();
         if (error) throw error;
+        if (!updated) throw new Error(`Travel row "${categoryName}" was not updated.`);
+        keptIds.add(updated.id);
       } else {
-        const { error } = await supabase.from('fss_outflow_oc_travel').insert(payload);
+        const { data: inserted, error } = await supabase
+          .from(TRAVEL_TABLE)
+          .insert(payload)
+          .select('id')
+          .single();
+        if (error) throw error;
+        if (!inserted) throw new Error(`Travel row "${categoryName}" was not inserted.`);
+        keptIds.add(inserted.id);
+      }
+      expectedRows.set(key, { ...row, category: categoryName });
+    }
+
+    // The UI treats sync as the source-of-truth reconciliation. Remove rows
+    // that no longer exist in the UI, including duplicate stale rows.
+    for (const existing of existingRows || []) {
+      if (!keptIds.has(existing.id)) {
+        const { error } = await supabase
+          .from(TRAVEL_TABLE)
+          .delete()
+          .eq('id', existing.id);
         if (error) throw error;
       }
     }
+
     const allRows = await this.loadTravelFromSupabase();
-    const loadedNames = new Set(allRows.map((r: any) => String(r.category || '').trim().toLowerCase()));
-    const missingCategories = rows
-      .map((r: any) => String(r.category || '').trim())
-      .filter((name: string) => {
-        const normalized = name.toLowerCase();
-        return name && !loadedNames.has(normalized) &&
-          !(normalized.includes('total') && loadedNames.has('travel'));
-      });
-    if (missingCategories.length > 0) {
-      throw new Error(`Travel rows were not reloaded from Supabase: ${missingCategories.join(', ')}.`);
+    const loadedByCategory = new Map(allRows.map((row: any) => [categoryKey(row.category), row]));
+    for (const [key, expected] of expectedRows) {
+      const loaded = loadedByCategory.get(key);
+      if (!loaded) throw new Error(`Travel row "${expected.category}" was not reloaded from Supabase.`);
+      for (const month of OFFICE_FIXED_MONTH_COLS) {
+        const expectedValue = expected[month] == null ? null : Number(expected[month]);
+        const loadedValue = loaded[month] == null ? null : Number(loaded[month]);
+        if (expectedValue === null ? loadedValue !== null : Math.round((loadedValue || 0) * 100) !== Math.round(expectedValue * 100)) {
+          throw new Error(`Travel row "${expected.category}" does not match Supabase for ${month}.`);
+        }
+      }
     }
     return { travel: allRows };
   },
@@ -5276,7 +5785,7 @@ export const SupabaseService = {
   async updateTravelCell(
     idOrCategory: number | string,
     monthCol: string,
-    newValue: number | string
+    newValue: number | string | null
   ): Promise<{ updatedRow: any; allRows: any[] }> {
     if (!supabase) throw new Error('Supabase is not configured.');
     const validMonthCols = OFFICE_FIXED_MONTH_COLS;
@@ -5285,74 +5794,45 @@ export const SupabaseService = {
       throw new Error(`Invalid month column: ${monthCol}`);
     }
 
-    const numVal = Number(newValue);
-    const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(cleanCol);
-    const cleanVal = isNaN(numVal) || numVal < 0 ? (isJanFebMar ? null : 0) : Math.round(numVal * 100) / 100;
+    const rawValue = newValue === null || newValue === undefined ? '' : String(newValue).trim();
+    const numVal = Number(rawValue);
+    const cleanVal = rawValue === '' || !Number.isFinite(numVal) || numVal < 0
+      ? null
+      : Math.round(numVal * 100) / 100;
 
     const categoryKey = String(idOrCategory ?? '').trim();
     const isNumeric = /^\d+$/.test(categoryKey);
     let currentRow: any = null;
     if (isNumeric) {
-      const { data, error } = await supabase.from('fss_outflow_oc_travel').select('*').eq('id', Number(categoryKey)).maybeSingle();
-      if (!error && data) currentRow = data;
+    const { data, error } = await supabase.from(TRAVEL_TABLE).select('*').eq('id', categoryKey).maybeSingle();
+      if (error) throw error;
+      if (data) currentRow = data;
     }
     if (!currentRow) {
-      const { data, error } = await supabase.from('fss_outflow_oc_travel').select('*').ilike('category', categoryKey).maybeSingle();
-      if (!error && data) currentRow = data;
+      const { data, error } = await supabase.from(TRAVEL_TABLE).select('*').ilike('category_name', categoryKey).maybeSingle();
+      if (error) throw error;
+      if (data) currentRow = data;
     }
     if (!currentRow) {
       throw new Error(`Record "${idOrCategory}" not found in fss_outflow_oc_travel.`);
     }
 
-    const { data: updated, error: updErr } = await supabase
-      .from('fss_outflow_oc_travel')
-      .update({ [cleanCol]: cleanVal })
-      .eq('id', currentRow.id)
-      .select()
-      .single();
+    const dbMonth = TRAVEL_DB_MONTH_COLS[cleanCol];
+    const { error: updErr } = await supabase
+      .from(TRAVEL_TABLE)
+      .update({ [dbMonth]: cleanVal })
+      .eq('id', currentRow.id);
+    if (updErr) throw updErr;
 
-    if (updErr) {
-      console.error('Error updating fss_outflow_oc_travel record:', updErr);
-      throw updErr;
-    }
-
-    // Fetch all records, recompute parent totals, fy_to_date, shares
-    const { data: allRaw } = await supabase
-      .from('fss_outflow_oc_travel')
+    const { data: allRaw, error: loadError } = await supabase
+      .from(TRAVEL_TABLE)
       .select('*')
       .order('id', { ascending: true });
-    const recomputed = recomputeTravelFyAndShares(allRaw || []);
-
-    // Synchronize parent group row in Supabase
-    const parentRow = recomputed.find((r: any) => String(r.category || '').toLowerCase().includes('total') || String(r.category || '').toLowerCase() === 'travel');
-    if (parentRow) {
-      const parentPayload: Record<string, any> = {
-        fy_to_date: parentRow.fy_to_date,
-        share: parentRow.share
-      };
-      for (const m of OFFICE_FIXED_MONTH_COLS) {
-        const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(m);
-        parentPayload[m] = isJanFebMar ? null : Math.round(Number(parentRow[m] || 0) * 100) / 100;
-      }
-      await supabase
-        .from('fss_outflow_oc_travel')
-        .update(parentPayload)
-        .eq('id', parentRow.id);
-    }
-
-    // Also update fy_to_date and share for updated row in Supabase
-    const updatedComputed = recomputed.find((r: any) => r.id === currentRow.id) || updated;
-    if (updatedComputed) {
-      await supabase
-        .from('fss_outflow_oc_travel')
-        .update({
-          fy_to_date: updatedComputed.fy_to_date,
-          share: updatedComputed.share
-        })
-        .eq('id', currentRow.id);
-    }
-
-    return { updatedRow: updatedComputed, allRows: recomputed };
+    if (loadError) throw loadError;
+    const synced = await this.syncTravelToSupabase((allRaw || []).map(travelUiRowFromSupabase));
+    const updatedRow = synced.travel.find((row: any) => row.id === currentRow.id);
+    if (!updatedRow) throw new Error(`Updated Travel row "${currentRow.category}" could not be reloaded.`);
+    return { updatedRow, allRows: synced.travel };
   },
 
   async addTravelExpense(
@@ -5366,108 +5846,131 @@ export const SupabaseService = {
       throw new Error('Cannot add a record named "Total" or "Travel".');
     }
 
-    const payload: Record<string, any> = { category: trimmed };
-    for (const m of OFFICE_FIXED_MONTH_COLS) {
-      const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(m);
-      payload[m] = monthlyAmounts[m] !== undefined
-        ? Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100
-        : (isJanFebMar ? null : 0);
-    }
-
-    const { data: existing } = await supabase
-      .from('fss_outflow_oc_travel')
-      .select('*')
-      .ilike('category', trimmed);
-
-    if (existing && existing.length > 0) {
-      const ex = existing[0];
-      const updatePayload: Record<string, any> = {};
-      for (const m of OFFICE_FIXED_MONTH_COLS) {
-        if (monthlyAmounts[m] !== undefined) {
-          updatePayload[m] = Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100;
-        } else {
-          updatePayload[m] = ex[m];
-        }
+    const normalize = (value: any) => String(value || '').trim().toLowerCase();
+    const existingRows = await this.loadTravelFromSupabase();
+    const loadError = null;
+    if (loadError) throw loadError;
+    const allRows = existingRows || [];
+    const existing = allRows.find((row: any) => normalize(row.category) === normalize(trimmed));
+    const nextRow: Record<string, any> = { ...(existing || {}), category: existing?.category || trimmed };
+    for (const month of OFFICE_FIXED_MONTH_COLS) {
+      if (monthlyAmounts[month] !== undefined) {
+        const value = monthlyAmounts[month];
+        const numeric = value === null || value === undefined || String(value).trim() === '' ? NaN : Number(value);
+        nextRow[month] = Number.isFinite(numeric) ? Math.round(numeric * 100) / 100 : null;
+      } else if (existing) {
+        nextRow[month] = existing[month];
+      } else {
+        nextRow[month] = null;
       }
-      await supabase
-        .from('fss_outflow_oc_travel')
-        .update(updatePayload)
-        .eq('id', ex.id);
-    } else {
-      await supabase.from('fss_outflow_oc_travel').insert(payload);
     }
 
-    const allRows = await this.loadTravelFromSupabase();
-    return allRows.find((r: any) => r.category === trimmed) || allRows[0];
+    const nextRows = existing
+      ? allRows.map((row: any) => row.id === existing.id ? nextRow : row)
+      : [...allRows, nextRow];
+    const synced = await this.syncTravelToSupabase(nextRows);
+    return synced.travel.find((row: any) => normalize(row.category) === normalize(trimmed));
   },
 
   async loadProfessionalAdminFromSupabase(): Promise<any[]> {
     if (!supabase) return [];
-    try {
-      const { data, error } = await supabase
-        .from('fss_outflow_oc_professional_admin')
-        .select('*')
-        .order('id', { ascending: true });
-      if (error) {
-        console.error('Error loading fss_outflow_oc_professional_admin from Supabase:', error);
-        return [];
-      }
-      return recomputeProfessionalAdminFyAndShares(data || []);
-    } catch (err) {
-      console.error('Exception loading fss_outflow_oc_professional_admin from Supabase:', err);
-      return [];
+    const { data, error } = await supabase
+      .from('fss_outflow_oc_professional_admin')
+      .select('*')
+      .order('id', { ascending: true });
+    if (error) {
+      console.error('Error loading fss_outflow_oc_professional_admin from Supabase:', error);
+      throw error;
     }
+    return recomputeProfessionalAdminFyAndShares(data || []);
   },
 
   async syncProfessionalAdminToSupabase(rows: any[]): Promise<{ professionalAdmin: any[] }> {
     if (!supabase) throw new Error('Supabase is not configured.');
     const computed = recomputeProfessionalAdminFyAndShares(rows || []);
-    try {
-      const computedNames = new Set(computed.map((r: any) => String(r.category || '').trim().toLowerCase()));
-      const { data: existingRows } = await supabase.from('fss_outflow_oc_professional_admin').select('id, category');
-      for (const er of existingRows || []) {
-        if (!computedNames.has(String(er.category || '').trim().toLowerCase())) {
-          await supabase.from('fss_outflow_oc_professional_admin').delete().eq('id', er.id);
-        }
-      }
-    } catch (e) { console.warn('Stale cleanup failed for professional_admin:', e); }
+    const categoryKey = (value: any) => {
+      const normalized = String(value || '').trim().toLowerCase();
+      return normalized.includes('total') || normalized === 'professional & admin'
+        ? '__professional_admin_total'
+        : normalized;
+    };
+    const { data: existingRows, error: existingError } = await supabase
+      .from('fss_outflow_oc_professional_admin')
+      .select('*');
+    if (existingError) throw existingError;
+    const existingByCategory = new Map<string, any[]>();
+    for (const existing of existingRows || []) {
+      const key = categoryKey(existing.category);
+      existingByCategory.set(key, [...(existingByCategory.get(key) || []), existing]);
+    }
+    const expectedRows = new Map<string, any>();
+    const keptIds = new Set<number | string>();
+    const nullableNumber = (value: any): number | null => {
+      if (value === null || value === undefined || String(value).trim() === '') return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? Math.round(numeric * 100) / 100 : null;
+    };
+
     for (const row of computed) {
       const categoryName = (row.category || '').trim();
       if (!categoryName) continue;
-      const payload: Record<string, any> = { category: categoryName };
+      const key = categoryKey(categoryName);
+      const current = (existingByCategory.get(key) || [])[0];
+      const payload: Record<string, any> = { category: current?.category || categoryName };
       for (const m of OFFICE_FIXED_MONTH_COLS) {
-        if (['jan26', 'feb26', 'mar26'].includes(m)) {
-          payload[m] = null;
-        } else {
-          const v = row[m];
-          payload[m] = (v === null || v === undefined || isNaN(Number(v))) ? 0 : Math.round(Number(v) * 100) / 100;
-        }
+        payload[m] = nullableNumber(row[m]);
       }
-      payload.fy_to_date = row.fy_to_date === null || row.fy_to_date === undefined ? null : Number(row.fy_to_date);
-      payload.share = Number(row.share || 0);
+      payload.fy_to_date = nullableNumber(row.fy_to_date);
+      payload.share = nullableNumber(row.share);
 
-      let { data: existing } = await supabase
-        .from('fss_outflow_oc_professional_admin')
-        .select('*')
-        .ilike('category', categoryName);
-      if ((!existing || existing.length === 0) && (categoryName.toLowerCase().includes('total') || categoryName.toLowerCase() === 'professional & admin')) {
-        const alt = await supabase
+      if (current) {
+        const { data: updated, error } = await supabase
           .from('fss_outflow_oc_professional_admin')
-          .select('*')
-          .or('category.ilike.Professional & Admin Total,category.ilike.Professional & Admin');
-        if (alt.data && alt.data.length > 0) {
-          existing = alt.data;
-        }
-      }
-      if (existing && existing.length > 0) {
-        const ex = existing[0];
-        payload.category = ex.category;
-        await supabase.from('fss_outflow_oc_professional_admin').update(payload).eq('id', ex.id);
+          .update(payload)
+          .eq('id', current.id)
+          .select('id')
+          .maybeSingle();
+        if (error) throw error;
+        if (!updated) throw new Error(`Professional & Admin row "${categoryName}" was not updated.`);
+        keptIds.add(updated.id);
       } else {
-        await supabase.from('fss_outflow_oc_professional_admin').insert(payload);
+        const { data: inserted, error } = await supabase
+          .from('fss_outflow_oc_professional_admin')
+          .insert(payload)
+          .select('id')
+          .single();
+        if (error) throw error;
+        if (!inserted) throw new Error(`Professional & Admin row "${categoryName}" was not inserted.`);
+        keptIds.add(inserted.id);
+      }
+      expectedRows.set(key, { ...(current || {}), ...payload });
+    }
+
+    // Remove Supabase rows that the UI no longer contains. This makes delete
+    // operations durable instead of allowing stale rows to return on reload.
+    for (const existing of existingRows || []) {
+      if (!keptIds.has(existing.id)) {
+        const { error } = await supabase
+          .from('fss_outflow_oc_professional_admin')
+          .delete()
+          .eq('id', existing.id);
+        if (error) throw error;
       }
     }
+
     const allRows = await this.loadProfessionalAdminFromSupabase();
+    const loadedByCategory = new Map(allRows.map((row: any) => [categoryKey(row.category), row]));
+    for (const [key, expected] of expectedRows) {
+      const loaded = loadedByCategory.get(key);
+      if (!loaded) throw new Error(`Professional & Admin row "${expected.category}" was not reloaded from Supabase.`);
+      for (const month of OFFICE_FIXED_MONTH_COLS) {
+        const expectedValue = expected[month] == null ? null : Number(expected[month]);
+        const loadedValue = loaded[month] == null ? null : Number(loaded[month]);
+        if (expectedValue === null ? loadedValue !== null : Math.round((loadedValue || 0) * 100) !== Math.round(expectedValue * 100)) {
+          throw new Error(`Professional & Admin row "${expected.category}" does not match Supabase for ${month}.`);
+        }
+      }
+    }
     return { professionalAdmin: allRows };
   },
 
@@ -5483,74 +5986,44 @@ export const SupabaseService = {
       throw new Error(`Invalid month column: ${monthCol}`);
     }
 
-    const numVal = Number(newValue);
-    const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(cleanCol);
-    const cleanVal = isNaN(numVal) || numVal < 0 ? (isJanFebMar ? null : 0) : Math.round(numVal * 100) / 100;
+    const rawValue = String(newValue ?? '').trim();
+    const numVal = Number(rawValue);
+    const cleanVal = rawValue === '' || isNaN(numVal) || numVal < 0
+      ? null
+      : Math.round(numVal * 100) / 100;
 
     const categoryKey = String(idOrCategory ?? '').trim();
     const isNumeric = /^\d+$/.test(categoryKey);
     let currentRow: any = null;
     if (isNumeric) {
       const { data, error } = await supabase.from('fss_outflow_oc_professional_admin').select('*').eq('id', Number(categoryKey)).maybeSingle();
-      if (!error && data) currentRow = data;
+      if (error) throw error;
+      if (data) currentRow = data;
     }
     if (!currentRow) {
       const { data, error } = await supabase.from('fss_outflow_oc_professional_admin').select('*').ilike('category', categoryKey).maybeSingle();
-      if (!error && data) currentRow = data;
+      if (error) throw error;
+      if (data) currentRow = data;
     }
     if (!currentRow) {
       throw new Error(`Record "${idOrCategory}" not found in fss_outflow_oc_professional_admin.`);
     }
 
-    const { data: updated, error: updErr } = await supabase
+    const { error: updErr } = await supabase
       .from('fss_outflow_oc_professional_admin')
       .update({ [cleanCol]: cleanVal })
-      .eq('id', currentRow.id)
-      .select()
-      .single();
+      .eq('id', currentRow.id);
+    if (updErr) throw updErr;
 
-    if (updErr) {
-      console.error('Error updating fss_outflow_oc_professional_admin record:', updErr);
-      throw updErr;
-    }
-
-    // Fetch all records, recompute parent totals, fy_to_date, shares
-    const { data: allRaw } = await supabase
+    const { data: allRaw, error: loadError } = await supabase
       .from('fss_outflow_oc_professional_admin')
       .select('*')
       .order('id', { ascending: true });
-    const recomputed = recomputeProfessionalAdminFyAndShares(allRaw || []);
-
-    // Synchronize parent group row in Supabase
-    const parentRow = recomputed.find((r: any) => String(r.category || '').toLowerCase().includes('total') || String(r.category || '').toLowerCase() === 'professional & admin');
-    if (parentRow) {
-      const parentPayload: Record<string, any> = {
-        fy_to_date: parentRow.fy_to_date,
-        share: parentRow.share
-      };
-      for (const m of OFFICE_FIXED_MONTH_COLS) {
-        const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(m);
-        parentPayload[m] = isJanFebMar ? null : Math.round(Number(parentRow[m] || 0) * 100) / 100;
-      }
-      await supabase
-        .from('fss_outflow_oc_professional_admin')
-        .update(parentPayload)
-        .eq('id', parentRow.id);
-    }
-
-    // Also update fy_to_date and share for updated row in Supabase
-    const updatedComputed = recomputed.find((r: any) => r.id === currentRow.id) || updated;
-    if (updatedComputed) {
-      await supabase
-        .from('fss_outflow_oc_professional_admin')
-        .update({
-          fy_to_date: updatedComputed.fy_to_date,
-          share: updatedComputed.share
-        })
-        .eq('id', currentRow.id);
-    }
-
-    return { updatedRow: updatedComputed, allRows: recomputed };
+    if (loadError) throw loadError;
+    const synced = await this.syncProfessionalAdminToSupabase(allRaw || []);
+    const updatedComputed = synced.professionalAdmin.find((row: any) => row.id === currentRow.id);
+    if (!updatedComputed) throw new Error(`Updated Professional & Admin row "${currentRow.category}" could not be reloaded.`);
+    return { updatedRow: updatedComputed, allRows: synced.professionalAdmin };
   },
 
   async addProfessionalAdminExpense(
@@ -5564,39 +6037,31 @@ export const SupabaseService = {
       throw new Error('Cannot add a record named "Total" or "Professional & Admin".');
     }
 
-    const payload: Record<string, any> = { category: trimmed };
-    for (const m of OFFICE_FIXED_MONTH_COLS) {
-      const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(m);
-      payload[m] = monthlyAmounts[m] !== undefined
-        ? Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100
-        : (isJanFebMar ? null : 0);
-    }
-
-    const { data: existing } = await supabase
+    const normalize = (value: any) => String(value || '').trim().toLowerCase();
+    const { data: existingRows, error: loadError } = await supabase
       .from('fss_outflow_oc_professional_admin')
-      .select('*')
-      .ilike('category', trimmed);
-
-    if (existing && existing.length > 0) {
-      const ex = existing[0];
-      const updatePayload: Record<string, any> = {};
-      for (const m of OFFICE_FIXED_MONTH_COLS) {
-        if (monthlyAmounts[m] !== undefined) {
-          updatePayload[m] = Math.round(Number(monthlyAmounts[m] || 0) * 100) / 100;
-        } else {
-          updatePayload[m] = ex[m];
-        }
+      .select('*');
+    if (loadError) throw loadError;
+    const allRows = existingRows || [];
+    const existing = allRows.find((row: any) => normalize(row.category) === normalize(trimmed));
+    const nextRow: Record<string, any> = { ...(existing || {}), category: existing?.category || trimmed };
+    for (const month of OFFICE_FIXED_MONTH_COLS) {
+      if (monthlyAmounts[month] !== undefined) {
+        const value = monthlyAmounts[month];
+        const numeric = value === null || value === undefined || String(value).trim() === '' ? NaN : Number(value);
+        nextRow[month] = Number.isFinite(numeric) ? Math.round(numeric * 100) / 100 : null;
+      } else if (existing) {
+        nextRow[month] = existing[month];
+      } else {
+        nextRow[month] = null;
       }
-      await supabase
-        .from('fss_outflow_oc_professional_admin')
-        .update(updatePayload)
-        .eq('id', ex.id);
-    } else {
-      await supabase.from('fss_outflow_oc_professional_admin').insert(payload);
     }
 
-    const allRows = await this.loadProfessionalAdminFromSupabase();
-    return allRows.find((r: any) => r.category === trimmed) || allRows[0];
+    const nextRows = existing
+      ? allRows.map((row: any) => row.id === existing.id ? nextRow : row)
+      : [...allRows, nextRow];
+    const synced = await this.syncProfessionalAdminToSupabase(nextRows);
+    return synced.professionalAdmin.find((row: any) => normalize(row.category) === normalize(trimmed));
   },
 
   /**
@@ -5607,7 +6072,7 @@ export const SupabaseService = {
     if (!supabase || !tableName || idOrKey == null) return false;
     // Allow passing a row object
     if (typeof idOrKey === 'object') {
-      idOrKey = idOrKey.id ?? idOrKey.category ?? idOrKey.expense_name ?? idOrKey.name ?? idOrKey.receipt_name ?? idOrKey.income_name ?? idOrKey.financing_name;
+      idOrKey = idOrKey.id ?? idOrKey.category ?? idOrKey.category_name ?? idOrKey.expense_name ?? idOrKey.name ?? idOrKey.receipt_name ?? idOrKey.income_name ?? idOrKey.financing_name;
     }
     if (idOrKey == null) return false;
     try {
@@ -5723,6 +6188,28 @@ export const SupabaseService = {
     }
     return ok;
   },
+  async deleteProjectCost2(idOrKey: any, monthCol?: string): Promise<boolean> {
+    if (!supabase) return false;
+    const rawKey = String(idOrKey ?? '').trim();
+    const category = rawKey.toLowerCase() === 'project costs' ? 'Project Costs Total' : rawKey;
+    if (monthCol) {
+      const month = String(monthCol).trim().toLowerCase();
+      if (!PROJECT_COST_MONTH_COLS.includes(month)) return false;
+      const { error } = await supabase.from('fss_outflow_project_cost_2')
+        .update({ [month]: 0 }).ilike('category', category);
+      if (error) {
+        console.error('Error clearing Project Costs 2 month:', error);
+        return false;
+      }
+      return true;
+    }
+    const { error } = await supabase.from('fss_outflow_project_cost_2').delete().ilike('category', category);
+    if (error) {
+      console.error('Error deleting Project Costs 2 row:', error);
+      return false;
+    }
+    return true;
+  },
   async deleteProjectCostExpense(idOrKey: any, monthCol?: string): Promise<boolean> {
     return this.deleteProjectCost(idOrKey, monthCol);
   },
@@ -5736,6 +6223,9 @@ export const SupabaseService = {
   // Capex outflow
   async deleteCapex(idOrKey: any): Promise<boolean> {
     return this.deleteOutflowRecord('fss_outflow_capex', idOrKey, 'category');
+  },
+  async deleteCapex2(idOrKey: any): Promise<boolean> {
+    return this.deleteOutflowRecord('fss_outflow_capex_2', idOrKey, 'category');
   },
   async deleteCapexExpense(idOrKey: any): Promise<boolean> {
     return this.deleteCapex(idOrKey);
@@ -5920,77 +6410,45 @@ export const SupabaseService = {
 
   // Travel outflow
   async deleteTravel(idOrKey: any, monthCol?: string): Promise<boolean> {
+    if (!supabase) throw new Error('Supabase is not configured.');
     if (monthCol) {
       const cleanMonth = String(monthCol || '').toLowerCase().trim();
-      const validMonthCols = OFFICE_FIXED_MONTH_COLS;
-      if (!validMonthCols.includes(cleanMonth)) return false;
+      if (!OFFICE_FIXED_MONTH_COLS.includes(cleanMonth)) {
+        throw new Error(`Invalid month column: ${monthCol}`);
+      }
       const categoryKey = String(idOrKey ?? '').trim();
       const isNumeric = /^\d+$/.test(categoryKey);
       let currentRow: any = null;
       if (isNumeric) {
-        const { data, error } = await supabase.from('fss_outflow_oc_travel').select('*').eq('id', Number(categoryKey)).maybeSingle();
-        if (!error && data) currentRow = data;
+        const { data, error } = await supabase.from(TRAVEL_TABLE).select('*').eq('id', categoryKey).maybeSingle();
+        if (error) throw error;
+        if (data) currentRow = data;
       }
       if (!currentRow) {
-        const { data, error } = await supabase.from('fss_outflow_oc_travel').select('*').ilike('category', categoryKey).maybeSingle();
-        if (!error && data) currentRow = data;
+        const { data, error } = await supabase.from(TRAVEL_TABLE).select('*').ilike('category_name', categoryKey).maybeSingle();
+        if (error) throw error;
+        if (data) currentRow = data;
       }
       if (!currentRow) {
-        console.warn('No matching record found in fss_outflow_oc_travel for key:', categoryKey);
-        return false;
+        throw new Error(`Travel row "${categoryKey}" was not found.`);
       }
-      const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(cleanMonth);
       const { error: updErr } = await supabase
-        .from('fss_outflow_oc_travel')
-        .update({ [cleanMonth]: isJanFebMar ? null : 0 })
+        .from(TRAVEL_TABLE)
+         .update({ [TRAVEL_DB_MONTH_COLS[cleanMonth]]: null })
         .eq('id', currentRow.id);
-      if (updErr) {
-        console.error('Error zeroing fss_outflow_oc_travel month column:', updErr);
-        return false;
-      }
-      const { data: allRaw } = await supabase.from('fss_outflow_oc_travel').select('*');
-      const recomputed = recomputeTravelFyAndShares(allRaw || []);
-      const parentRow = recomputed.find((r: any) => String(r.category || '').toLowerCase().includes('total') || String(r.category || '').toLowerCase() === 'travel');
-      if (parentRow) {
-        const parentPayload: Record<string, any> = {
-          fy_to_date: parentRow.fy_to_date,
-          share: parentRow.share
-        };
-        for (const m of OFFICE_FIXED_MONTH_COLS) {
-          const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(m);
-          parentPayload[m] = isJanFebMar ? null : Math.round(Number(parentRow[m] || 0) * 100) / 100;
-        }
-        await supabase
-          .from('fss_outflow_oc_travel')
-          .update(parentPayload)
-          .eq('id', parentRow.id);
-      }
+      if (updErr) throw updErr;
+
+      const { data: allRaw, error: loadError } = await supabase.from(TRAVEL_TABLE).select('*');
+      if (loadError) throw loadError;
+      await this.syncTravelToSupabase((allRaw || []).map(travelUiRowFromSupabase));
       return true;
     }
-    const ok = await this.deleteOutflowRecord('fss_outflow_oc_travel', idOrKey, 'category');
-    if (ok) {
-      try {
-        const { data: allRaw } = await supabase.from('fss_outflow_oc_travel').select('*');
-        const recomputed = recomputeTravelFyAndShares(allRaw || []);
-        const parentRow = recomputed.find((r: any) => String(r.category || '').toLowerCase().includes('total') || String(r.category || '').toLowerCase() === 'travel');
-        if (parentRow) {
-          const parentPayload: Record<string, any> = {
-            fy_to_date: parentRow.fy_to_date,
-            share: parentRow.share
-          };
-          for (const m of OFFICE_FIXED_MONTH_COLS) {
-            const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(m);
-            parentPayload[m] = isJanFebMar ? null : Math.round(Number(parentRow[m] || 0) * 100) / 100;
-          }
-          await supabase
-            .from('fss_outflow_oc_travel')
-            .update(parentPayload)
-            .eq('id', parentRow.id);
-        }
-      } catch (e) {
-        console.warn('Failed to recompute travel totals after delete:', e);
-      }
-    }
+
+    const ok = await this.deleteOutflowRecord(TRAVEL_TABLE, idOrKey, 'category_name');
+    if (!ok) return false;
+    const { data: allRaw, error: loadError } = await supabase.from(TRAVEL_TABLE).select('*');
+    if (loadError) throw loadError;
+    await this.syncTravelToSupabase((allRaw || []).map(travelUiRowFromSupabase));
     return ok;
   },
   async deleteTravelExpense(idOrKey: any, monthCol?: string): Promise<boolean> {
@@ -6005,77 +6463,44 @@ export const SupabaseService = {
 
   // Professional admin outflow
   async deleteProfessionalAdmin(idOrKey: any, monthCol?: string): Promise<boolean> {
+    if (!supabase) throw new Error('Supabase is not configured.');
     if (monthCol) {
       const cleanMonth = String(monthCol || '').toLowerCase().trim();
-      const validMonthCols = OFFICE_FIXED_MONTH_COLS;
-      if (!validMonthCols.includes(cleanMonth)) return false;
+      if (!OFFICE_FIXED_MONTH_COLS.includes(cleanMonth)) {
+        throw new Error(`Invalid month column: ${monthCol}`);
+      }
       const categoryKey = String(idOrKey ?? '').trim();
       const isNumeric = /^\d+$/.test(categoryKey);
       let currentRow: any = null;
       if (isNumeric) {
         const { data, error } = await supabase.from('fss_outflow_oc_professional_admin').select('*').eq('id', Number(categoryKey)).maybeSingle();
-        if (!error && data) currentRow = data;
+        if (error) throw error;
+        if (data) currentRow = data;
       }
       if (!currentRow) {
         const { data, error } = await supabase.from('fss_outflow_oc_professional_admin').select('*').ilike('category', categoryKey).maybeSingle();
-        if (!error && data) currentRow = data;
+        if (error) throw error;
+        if (data) currentRow = data;
       }
       if (!currentRow) {
-        console.warn('No matching record found in fss_outflow_oc_professional_admin for key:', categoryKey);
-        return false;
+        throw new Error(`Professional & Admin row "${categoryKey}" was not found.`);
       }
-      const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(cleanMonth);
       const { error: updErr } = await supabase
         .from('fss_outflow_oc_professional_admin')
-        .update({ [cleanMonth]: isJanFebMar ? null : 0 })
+        .update({ [cleanMonth]: null })
         .eq('id', currentRow.id);
-      if (updErr) {
-        console.error('Error zeroing fss_outflow_oc_professional_admin month column:', updErr);
-        return false;
-      }
-      const { data: allRaw } = await supabase.from('fss_outflow_oc_professional_admin').select('*');
-      const recomputed = recomputeProfessionalAdminFyAndShares(allRaw || []);
-      const parentRow = recomputed.find((r: any) => String(r.category || '').toLowerCase().includes('total') || String(r.category || '').toLowerCase() === 'professional & admin');
-      if (parentRow) {
-        const parentPayload: Record<string, any> = {
-          fy_to_date: parentRow.fy_to_date,
-          share: parentRow.share
-        };
-        for (const m of OFFICE_FIXED_MONTH_COLS) {
-          const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(m);
-          parentPayload[m] = isJanFebMar ? null : Math.round(Number(parentRow[m] || 0) * 100) / 100;
-        }
-        await supabase
-          .from('fss_outflow_oc_professional_admin')
-          .update(parentPayload)
-          .eq('id', parentRow.id);
-      }
+      if (updErr) throw updErr;
+      const { data: allRaw, error: loadError } = await supabase.from('fss_outflow_oc_professional_admin').select('*');
+      if (loadError) throw loadError;
+      await this.syncProfessionalAdminToSupabase(allRaw || []);
       return true;
     }
+
     const ok = await this.deleteOutflowRecord('fss_outflow_oc_professional_admin', idOrKey, 'category');
-    if (ok) {
-      try {
-        const { data: allRaw } = await supabase.from('fss_outflow_oc_professional_admin').select('*');
-        const recomputed = recomputeProfessionalAdminFyAndShares(allRaw || []);
-        const parentRow = recomputed.find((r: any) => String(r.category || '').toLowerCase().includes('total') || String(r.category || '').toLowerCase() === 'professional & admin');
-        if (parentRow) {
-          const parentPayload: Record<string, any> = {
-            fy_to_date: parentRow.fy_to_date,
-            share: parentRow.share
-          };
-          for (const m of OFFICE_FIXED_MONTH_COLS) {
-            const isJanFebMar = ['jan26', 'feb26', 'mar26'].includes(m);
-            parentPayload[m] = isJanFebMar ? null : Math.round(Number(parentRow[m] || 0) * 100) / 100;
-          }
-          await supabase
-            .from('fss_outflow_oc_professional_admin')
-            .update(parentPayload)
-            .eq('id', parentRow.id);
-        }
-      } catch (e) {
-        console.warn('Failed to recompute professional admin totals after delete:', e);
-      }
-    }
+    if (!ok) return false;
+    const { data: allRaw, error: loadError } = await supabase.from('fss_outflow_oc_professional_admin').select('*');
+    if (loadError) throw loadError;
+    await this.syncProfessionalAdminToSupabase(allRaw || []);
     return ok;
   },
   async deleteProfessionalAdminExpense(idOrKey: any, monthCol?: string): Promise<boolean> {
@@ -6089,8 +6514,150 @@ export const SupabaseService = {
   },
 
   // Operation cost outflow (table may exist in Supabase)
+  async syncOperationCostToSupabase(rows: any[]): Promise<any[]> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+
+    const tableName = 'fss_cash_outflow';
+    const monthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+    const { error: schemaError } = await supabase
+      .from(tableName)
+      .select(`category_name,sort_order,${monthCols.join(',')},fy_to_date,shares`)
+      .limit(0);
+    if (schemaError) {
+      console.error(`Unable to resolve ${tableName} columns:`, schemaError);
+      throw schemaError;
+    }
+
+    const desiredRows = (rows || []).filter((row: any) => String(row.category_name || '').trim());
+    const desiredNames = new Set(desiredRows.map((row: any) => String(row.category_name).trim().toLowerCase()));
+    const { data: existingRows, error: loadError } = await supabase.from(tableName).select('*');
+    if (loadError) throw loadError;
+
+    const retainedNames = new Set<string>();
+    for (const existing of existingRows || []) {
+      const name = String(existing.category_name || '').trim().toLowerCase();
+      if (!desiredNames.has(name) || retainedNames.has(name)) {
+        const { error } = await supabase.from(tableName).delete().eq('id', existing.id);
+        if (error) throw error;
+      } else {
+        retainedNames.add(name);
+      }
+    }
+
+    for (const row of desiredRows) {
+      const categoryName = String(row.category_name).trim();
+      const existing = (existingRows || []).find((item: any) =>
+        String(item.category_name || '').trim().toLowerCase() === categoryName.toLowerCase()
+      );
+      const payload: Record<string, any> = {
+        category_name: categoryName,
+        sort_order: Number(row.sort_order || 0),
+        fy_to_date: row.fy_to_date === null || row.fy_to_date === undefined || row.fy_to_date === ''
+          ? null
+          : Math.round(Number(row.fy_to_date) * 100) / 100,
+        shares: Number(row.shares || 0)
+      };
+      for (const month of monthCols) {
+        const value = row[month];
+        payload[month] = value === null || value === undefined || value === ''
+          ? null
+          : Math.round(Number(value) * 100) / 100;
+      }
+
+      const result = existing
+        ? await supabase.from(tableName).update(payload).eq('id', existing.id)
+        : await supabase.from(tableName).insert(payload);
+      if (result.error) {
+        console.error(`Error saving ${categoryName} to ${tableName}:`, result.error);
+        throw result.error;
+      }
+    }
+
+    const { data, error } = await supabase.from(tableName).select('*').order('sort_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async syncCashflowStatementToSupabase(rows: any[]): Promise<any[]> {
+    if (!supabase) throw new Error('Supabase is not configured.');
+
+    const tableName = 'fss_cash_flow_statement';
+    const monthCols = [
+      'jan_26', 'feb_26', 'mar_26', 'apr_26', 'may_26', 'jun_26',
+      'jul_26', 'aug_26', 'sep_26', 'oct_26', 'nov_26', 'dec_26'
+    ];
+    const categories = ['Opening Balance', 'Cash Inflow', 'Cash Outflow', 'Net Cash Flow', 'Closing Balance'];
+    const { error: schemaError } = await supabase
+      .from(tableName)
+      .select(`category_name,sort_order,${monthCols.join(',')},fy_to_date,shares`)
+      .limit(0);
+    if (schemaError) {
+      console.error(`Unable to resolve ${tableName} columns:`, schemaError);
+      throw schemaError;
+    }
+
+    const rowsByName = new Map(
+      (rows || []).map((row: any) => [String(row.category_name || '').trim().toLowerCase(), row])
+    );
+    const { data: existingRows, error: loadError } = await supabase.from(tableName).select('*');
+    if (loadError) throw loadError;
+
+    for (const [sortOrder, categoryName] of categories.entries()) {
+      const row = rowsByName.get(categoryName.toLowerCase());
+      if (!row) {
+        throw new Error(`Missing "${categoryName}" in the cashflow statement UI; Supabase was not changed.`);
+      }
+
+      const numericValue = (value: any, field: string): number | null => {
+        if (value === null || value === undefined || value === '') return null;
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          throw new Error(`Invalid ${field} for "${categoryName}"; Supabase was not changed.`);
+        }
+        return Math.round(numeric * 100) / 100;
+      };
+      const payload: Record<string, any> = {
+        category_name: categoryName,
+        sort_order: sortOrder,
+        fy_to_date: numericValue(row.fy_to_date, 'FY-to-date value'),
+        shares: numericValue(row.shares, 'share')
+      };
+      for (const month of monthCols) {
+        payload[month] = numericValue(row[month], month);
+      }
+
+      const matches = (existingRows || []).filter((item: any) =>
+        String(item.category_name || '').trim().toLowerCase() === categoryName.toLowerCase()
+      );
+      if (matches.length) {
+        const { error } = await supabase.from(tableName).update(payload).eq('id', matches[0].id);
+        if (error) {
+          console.error(`Error saving ${categoryName} to ${tableName}:`, error);
+          throw error;
+        }
+        for (const duplicate of matches.slice(1)) {
+          const { error: deleteError } = await supabase.from(tableName).delete().eq('id', duplicate.id);
+          if (deleteError) throw deleteError;
+        }
+      } else {
+        const { error } = await supabase.from(tableName).insert(payload);
+        if (error) {
+          console.error(`Error saving ${categoryName} to ${tableName}:`, error);
+          throw error;
+        }
+      }
+    }
+
+    const { data, error } = await supabase.from(tableName).select('*').order('sort_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+
   async deleteOperationCost(idOrKey: any): Promise<boolean> {
-    return this.deleteOutflowRecord('fss_outflow_operation_cost', idOrKey, 'category');
+    return this.deleteOutflowRecord('fss_cash_outflow', idOrKey, 'category_name');
   },
   async deleteOperationCostExpense(idOrKey: any): Promise<boolean> {
     return this.deleteOperationCost(idOrKey);
@@ -6126,43 +6693,60 @@ export const SupabaseService = {
 
   // Persist corrected fss_outflow_tax_statutory rows: upsert the given rows and drop stale records.
   async persistTaxStatutoryRows(rows: any[]): Promise<void> {
-    if (!supabase) return;
+    if (!supabase) throw new Error('Supabase is not configured.');
     const computed = rows || [];
-    const computedCats = new Set(computed.map((r: any) => String(r?.category || '').trim().toLowerCase()));
-    const { data: existing } = await supabase
+    const normalize = (value: any) => String(value || '').trim().toLowerCase();
+    const { data: existing, error: loadError } = await supabase
       .from('fss_outflow_tax_statutory')
-      .select('category');
-    const stale = (existing || []).map((r: any) => String(r?.category || '')).filter((c: string) => c && !computedCats.has(c.trim().toLowerCase()));
-    for (const c of stale) {
-      try {
-        await supabase.from('fss_outflow_tax_statutory').delete().eq('category', c);
-      } catch (e) {
-        console.error('Error deleting stale fss_outflow_tax_statutory record:', c, e);
-      }
-    }
+      .select('*');
+    if (loadError) throw loadError;
+
+    const desired = new Map<string, any>();
     for (const r of computed) {
-      const payload: Record<string, any> = { category: r.category };
-      for (const m of TAX_STATUTORY_MONTH_COLS) {
-        if (['jan_26', 'feb_26', 'mar_26'].includes(m)) {
-          payload[m] = null;
-        } else {
-          payload[m] = r[m] !== null && r[m] !== undefined ? Math.round(Number(r[m]) * 100) / 100 : 0;
+      const category = String(r?.category || '').trim();
+      if (category) desired.set(normalize(category), { ...r, category });
+    }
+    const existingByCategory = new Map<string, any[]>();
+    for (const row of existing || []) {
+      const key = normalize(row.category);
+      existingByCategory.set(key, [...(existingByCategory.get(key) || []), row]);
+    }
+
+    const nullableNumber = (value: any): number | null => {
+      if (value === null || value === undefined || String(value).trim() === '') return null;
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) throw new Error(`Invalid numeric value in Tax & Statutory data: ${value}`);
+      return Math.round(numeric * 100) / 100;
+    };
+
+    // Delete categories removed from the UI and duplicate cloud rows first.
+    for (const [key, matches] of existingByCategory) {
+      if (!desired.has(key) || matches.length > 1) {
+        const categoryNames = [...new Set(matches.map((row: any) => String(row.category || '')))];
+        for (const category of categoryNames) {
+          const { error } = await supabase.from('fss_outflow_tax_statutory').delete().eq('category', category);
+          if (error) throw error;
         }
       }
-      payload.fy_to_date = r.fy_to_date;
-      payload.shares = r.shares;
-      const { data: ex } = await supabase
-        .from('fss_outflow_tax_statutory')
-        .select('*')
-        .ilike('category', String(r.category || ''));
-      if (ex && ex.length > 0) {
-        await supabase
+    }
+
+    for (const [key, r] of desired) {
+      const payload: Record<string, any> = { category: r.category };
+      for (const m of TAX_STATUTORY_MONTH_COLS) {
+        payload[m] = nullableNumber(r[m]);
+      }
+      payload.fy_to_date = nullableNumber(r.fy_to_date);
+      payload.shares = nullableNumber(r.shares);
+
+      const matches = existingByCategory.get(key) || [];
+      const surviving = matches.length === 1 && desired.has(key) ? matches[0] : null;
+      const result = surviving
+        ? await supabase
           .from('fss_outflow_tax_statutory')
           .update(payload)
-          .eq('category', ex[0].category);
-      } else {
-        await supabase.from('fss_outflow_tax_statutory').insert(payload);
-      }
+          .eq('category', surviving.category)
+        : await supabase.from('fss_outflow_tax_statutory').insert(payload);
+      if (result.error) throw result.error;
     }
   },
 
@@ -6316,17 +6900,14 @@ export const SupabaseService = {
   },
 
   async syncTaxStatutoryToSupabase(taxStatutoryRows: any[]): Promise<{ taxStatutory: any[] }> {
-    if (!supabase) return { taxStatutory: taxStatutoryRows || [] };
-    try {
-      const rows = recomputeTaxStatutoryFyAndShares(taxStatutoryRows || []);
-      // Replace any existing (possibly incorrect) fss_outflow_tax_statutory records with the corrected UI rows.
-      await this.persistTaxStatutoryRows(rows);
-      const loaded = await this.loadTaxStatutoryFromSupabase();
-      return { taxStatutory: loaded };
-    } catch (err) {
-      console.error('Error syncing tax & statutory to Supabase:', err);
-      return { taxStatutory: taxStatutoryRows || [] };
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const rows = recomputeTaxStatutoryFyAndShares(taxStatutoryRows || []);
+    await this.persistTaxStatutoryRows(rows);
+    const loaded = await this.loadTaxStatutoryFromSupabase();
+    if (rows.length > 0 && loaded.length === 0) {
+      throw new Error('Tax & Statutory rows were saved but could not be reloaded from Supabase.');
     }
+    return { taxStatutory: loaded };
   },
 
   async deleteTaxStatutory(idOrKey: any, monthCol?: string): Promise<boolean> {

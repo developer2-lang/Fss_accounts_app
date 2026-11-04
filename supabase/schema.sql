@@ -304,4 +304,91 @@ create table if not exists public.fss_bank_accounts (
 alter table public.fss_bank_accounts enable row level security;
 create policy "Allow all actions on fss_bank_accounts" on public.fss_bank_accounts for all using (true) with check (true);
 
+-- 15.3 fss_form_tax_statutory
+create table if not exists public.fss_form_tax_statutory (
+    id uuid primary key default gen_random_uuid(),
+    paying_type text not null check (paying_type in ('GST', 'TDS', 'Professional tax', 'Advance tax')),
+    tax_month date not null,
+    amount_paid numeric(14,2) not null default 0,
+    party text,
+    category text,
+    department text,
+    challan_no text,
+    attachment_url text,
+    payment_date date not null,
+    payment_mode text,
+    paid_from text not null,
+    utr_cheque_ref text,
+    description text,
+    notes text,
+    repeat_every_cycle boolean default false,
+    created_at timestamptz default now(),
+    updated_at timestamptz default now()
+);
+
+alter table public.fss_form_tax_statutory enable row level security;
+create policy "Allow all actions on fss_form_tax_statutory" on public.fss_form_tax_statutory for all using (true) with check (true);
+
+-- 15.4 fss_form_other_expense
+create table if not exists public.fss_form_other_expense (
+    id uuid primary key default gen_random_uuid(),
+    expense_category text not null,
+    paid_to text,
+    department text,
+    amount_before_gst numeric(14,2) not null default 0,
+    gst_rate numeric(5,2) default 0,
+    gst_amount numeric(14,2) default 0,
+    tds_amount numeric(14,2) default 0,
+    net_cash_paid numeric(14,2) default 0,
+    payment_date date not null,
+    payment_mode text,
+    paid_from text not null,
+    utr_cheque_ref text,
+    attachment_url text,
+    description text,
+    reference_no text,
+    project text,
+    gst_type text,
+    input_gst_claimable boolean default true,
+    notes text,
+    repeat_every_cycle boolean default false,
+    created_at timestamptz default now(),
+    updated_at timestamptz default now()
+);
+
+alter table public.fss_form_other_expense enable row level security;
+create policy "Allow all actions on fss_form_other_expense" on public.fss_form_other_expense for all using (true) with check (true);
+
+-- 15.5 fss_form_client_payment
+create table if not exists public.fss_form_client_payment (
+    id uuid primary key default gen_random_uuid(),
+    client_name text not null,
+    category text,
+    project text,
+    department text,
+    amount_before_gst numeric(14,2) not null default 0,
+    gst_rate numeric(5,2) default 0,
+    gst_amount numeric(14,2) default 0,
+    tds_rate numeric(5,2) default 0,
+    tds_amount numeric(14,2) default 0,
+    net_cash_received numeric(14,2) default 0,
+    payment_date date not null,
+    payment_mode text,
+    received_into text not null,
+    utr_cheque_ref text,
+    attachment_url text,
+    description text,
+    gst_type text,
+    notes text,
+    repeat_every_cycle boolean default false,
+    email_receipt boolean default false,
+    receipt_to text,
+    receipt_cc text,
+    created_at timestamptz default now(),
+    updated_at timestamptz default now()
+);
+
+alter table public.fss_form_client_payment enable row level security;
+create policy "Allow all actions on fss_form_client_payment" on public.fss_form_client_payment for all using (true) with check (true);
+
 

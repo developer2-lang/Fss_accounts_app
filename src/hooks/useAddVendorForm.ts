@@ -174,9 +174,18 @@ export function useAddVendorForm(options: UseAddVendorFormOptions = {}) {
         );
 
         if (res && res.vendor) {
+          // Confirm the row is readable from the same Supabase project before
+          // updating the local Master list. This prevents a local-only vendor
+          // from appearing when the cloud write/read is misconfigured.
+          const cloudVendors = await SupabaseService.loadVendorsFromSupabase();
+          const savedVendor = cloudVendors.find((vendor: any) => String(vendor.id) === String(res.vendor.id));
+          if (!savedVendor) {
+            throw new Error('Vendor was not found after saving to Supabase. Please verify the Supabase project and table permissions.');
+          }
+
           const completeVendor = {
-            ...res.vendor,
-            people: res.people || []
+            ...savedVendor,
+            people: savedVendor.people || res.people || []
           };
           if (onSuccess) onSuccess(completeVendor);
           resetForm();
