@@ -9,6 +9,7 @@ import { AddProjectModal } from './components/AddProjectModal';
 import { AddDepartmentModal } from './components/AddDepartmentModal';
 import { AddBankAccountModal } from './components/AddBankAccountModal';
 import { AddCategoryModal } from './components/AddCategoryModal';
+import { PayVendorAuthModal, PAY_VENDOR_AUTH_EMAIL } from './components/PayVendorAuthModal';
 import './styles/index.css';
 
 function replaceMasterRows(
@@ -742,6 +743,7 @@ export const App: React.FC = () => {
   const [showAddDepartmentModal, setShowAddDepartmentModal] = useState<boolean>(false);
   const [showAddBankAccountModal, setShowAddBankAccountModal] = useState<boolean>(false);
   const [showAddCategoryModal, setShowAddCategoryModal] = useState<boolean>(false);
+  const [showPayVendorAuthModal, setShowPayVendorAuthModal] = useState<boolean>(false);
   const cashflowSummarySyncQueue = useRef<Promise<any[]>>(Promise.resolve([]));
   const isHydratingSupabase = useRef(false);
 
@@ -2119,6 +2121,15 @@ export const App: React.FC = () => {
         setCloudStatus(prev => ({ ...prev, lastSynced: new Date().toLocaleTimeString(), error: null }));
         return row;
       };
+      (window as any).__supabaseEnsurePayVendorAuth = async () => {
+        const hostname = window.location.hostname.toLowerCase();
+        if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname)) return true;
+        const session = await SupabaseService.getPayVendorAuthSession();
+        if (session?.user?.email?.toLowerCase() === PAY_VENDOR_AUTH_EMAIL) return true;
+        if (session) await SupabaseService.signOutPayVendor();
+        setShowPayVendorAuthModal(true);
+        return false;
+      };
       (window as any).__supabaseLoadPayVendorEntries = (id?: string) => SupabaseService.loadPayVendorEntries(id);
       (window as any).__supabaseUpdatePayVendorEntry = (id: string, entry: any) => SupabaseService.updatePayVendorEntry(id, entry);
       (window as any).__supabaseDeletePayVendorEntry = (id: string) => SupabaseService.deletePayVendorEntry(id);
@@ -3318,6 +3329,7 @@ export const App: React.FC = () => {
       delete (window as any).__supabaseSaveVendor;
       delete (window as any).__supabaseDeleteVendor;
       delete (window as any).__supabaseSavePayVendorEntry;
+      delete (window as any).__supabaseEnsurePayVendorAuth;
       delete (window as any).__supabaseLoadPayVendorEntries;
       delete (window as any).__supabaseUpdatePayVendorEntry;
       delete (window as any).__supabaseDeletePayVendorEntry;
@@ -3602,6 +3614,11 @@ export const App: React.FC = () => {
         isOpen={showAddCategoryModal}
         onClose={() => setShowAddCategoryModal(false)}
         onSuccess={handleCategoryAdded}
+      />
+      <PayVendorAuthModal
+        isOpen={showPayVendorAuthModal}
+        onClose={() => setShowPayVendorAuthModal(false)}
+        onSuccess={() => setShowPayVendorAuthModal(false)}
       />
     </>
   );

@@ -429,17 +429,40 @@ function recomputeProfessionalAdminFyAndShares(rows: any[]): any[] {
 }
 
 export const SupabaseService = {
+  async getPayVendorAuthSession() {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    return data.session;
+  },
+  async signInPayVendor(email: string, password: string) {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data.session;
+  },
+  async signOutPayVendor() {
+    if (!supabase) return;
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+  },
   async callPayVendorEdgeFunction(body: Record<string, any>): Promise<any> {
     if (!isSupabaseConfigured) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
     const hostname = typeof window === 'undefined' ? '' : window.location.hostname.toLowerCase();
-    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname)) {
-      throw new Error('Pay a Vendor is disabled on deployed sites until Supabase Auth and server-side role authorization are implemented.');
+    const isLocalhost = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (!isLocalhost) {
+      const session = await this.getPayVendorAuthSession();
+      if (!session?.access_token) {
+        throw new Error('Sign in with the authorized Supabase account to use Pay a Vendor.');
+      }
+      headers.Authorization = `Bearer ${session.access_token}`;
     }
     let response: Response;
     try {
       response = await fetch('/api/fss-pay-vendor', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body)
       });
     } catch {

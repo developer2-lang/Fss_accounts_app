@@ -11,15 +11,16 @@ The IUOVA app uses a local role selector rather than Supabase Auth. Browser-side
 - `SUPABASE_SERVICE_ROLE_KEY` is read only inside the Edge Function runtime. Supabase injects it there; never put it in an app `.env` or `VITE_*` variable.
 - RLS remains enabled. The function uses the privileged client, so it applies an explicit owner scope (`FSS_DEFAULT_CREATED_BY`) itself. If no default owner is configured, it scopes records to `created_by IS NULL` for this development installation.
 
-This proxy is development-only. Do not deploy the Vite server as a public production backend. Production access needs a server-side proxy or an authenticated identity provider.
+The Vite proxy is development-only. Production requests go through the root-level Vercel API function, which verifies a Supabase Auth access token and an explicit email allowlist before forwarding to this function.
 
-The Vercel deployment includes a root-level `/api/fss-pay-vendor` function that returns HTTP 410 without accessing Supabase. The app also blocks Pay a Vendor requests on non-loopback hosts. Keep the feature disabled in production until real user authentication and server-side role authorization are implemented; do not expose the Edge Function access token or service-role key to the browser.
+The browser never receives `FSS_EDGE_ACCESS_TOKEN` or `SUPABASE_SERVICE_ROLE_KEY`. Keep the Edge Function token and service-role key in server-side secret stores only. Supabase RLS remains enabled; this function scopes every operation to the configured owner (`FSS_DEFAULT_CREATED_BY`, or `created_by IS NULL` when unset).
 
 ## Configure and deploy
 
-1. Generate a random token with at least 32 bytes of entropy. Put the same value in the root `.env` as `FSS_EDGE_ACCESS_TOKEN` and in `supabase/.env.pay-vendor.local` as `FSS_EDGE_ACCESS_TOKEN=...`. This local secrets file is git-ignored.
+1. Generate a random token with at least 32 bytes of entropy. Put the same value in the root `.env` as `FSS_EDGE_ACCESS_TOKEN` and in `supabase/.env.pay-vendor.local` as `FSS_EDGE_ACCESS_TOKEN=...`. Set this token as a sensitive Vercel Production environment variable with the same name.
 2. Optionally add `FSS_DEFAULT_CREATED_BY=<Auth user UUID>` to `supabase/.env.pay-vendor.local` to scope rows to a dedicated Supabase Auth user. No app login UI is needed.
-3. Link the Supabase CLI to the project in this workspace, then set the function secrets and deploy:
+3. Set `FSS_PAY_VENDOR_ALLOWED_EMAILS` in Vercel Production to the comma-separated emails allowed to use Pay a Vendor. The Vercel function checks the verified Supabase Auth email on every request.
+4. Link the Supabase CLI to the project in this workspace, then set the function secrets and deploy:
 
    ```powershell
    supabase secrets set --env-file supabase/.env.pay-vendor.local
