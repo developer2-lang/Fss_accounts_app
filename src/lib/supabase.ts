@@ -431,6 +431,10 @@ function recomputeProfessionalAdminFyAndShares(rows: any[]): any[] {
 export const SupabaseService = {
   async callPayVendorEdgeFunction(body: Record<string, any>): Promise<any> {
     if (!isSupabaseConfigured) throw new Error('Supabase is not configured. Check the VITE_SUPABASE_URL and anon key.');
+    const hostname = typeof window === 'undefined' ? '' : window.location.hostname.toLowerCase();
+    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname)) {
+      throw new Error('Pay a Vendor is disabled on deployed sites until Supabase Auth and server-side role authorization are implemented.');
+    }
     let response: Response;
     try {
       response = await fetch('/api/fss-pay-vendor', {
@@ -4810,20 +4814,15 @@ export const SupabaseService = {
    */
   async loadCapexFromSupabase(): Promise<any[]> {
     if (!supabase) return [];
-    try {
-      const { data, error } = await supabase
-        .from('fss_outflow_capex')
-        .select('*')
-        .order('category', { ascending: true });
-      if (error) {
-        console.error('Error loading fss_outflow_capex from Supabase:', error);
-        return [];
-      }
-      return data || [];
-    } catch (err) {
-      console.error('Exception loading fss_outflow_capex from Supabase:', err);
-      return [];
+    const { data, error } = await supabase
+      .from('fss_outflow_capex')
+      .select('*')
+      .order('category', { ascending: true });
+    if (error) {
+      console.error('Error loading fss_outflow_capex from Supabase:', error);
+      throw error;
     }
+    return data || [];
   },
 
   /**
@@ -4958,20 +4957,6 @@ export const SupabaseService = {
     const synced: any[] = [];
 
     const normalizeCategory = (category: any) => String(category || '').trim().toLowerCase();
-    const computedNames = new Set(rows.map((r: any) => normalizeCategory(r.category)));
-    const { data: existingRows, error: existingErr } = await supabase
-      .from('fss_outflow_capex')
-      .select('id, category');
-    if (existingErr) throw existingErr;
-    for (const er of existingRows || []) {
-      if (!computedNames.has(normalizeCategory(er.category))) {
-        const { error: deleteErr } = await supabase
-          .from('fss_outflow_capex')
-          .delete()
-          .eq('id', er.id);
-        if (deleteErr) throw deleteErr;
-      }
-    }
 
     for (const row of rows) {
       const category = (row.category || '').trim();
@@ -6233,7 +6218,21 @@ export const SupabaseService = {
 
   // Capex outflow
   async deleteCapex(idOrKey: any): Promise<boolean> {
-    return this.deleteOutflowRecord('fss_outflow_capex', idOrKey, 'category');
+    if (!supabase || idOrKey == null) return false;
+    const category = typeof idOrKey === 'object'
+      ? String(idOrKey.category ?? idOrKey.category_name ?? idOrKey.name ?? '').trim()
+      : String(idOrKey).trim();
+    if (!category) return false;
+    const { data, error } = await supabase
+      .from('fss_outflow_capex')
+      .delete()
+      .ilike('category', category)
+      .select('category');
+    if (error) {
+      console.error('Error deleting Capex row by category:', error);
+      return false;
+    }
+    return Boolean(data?.length);
   },
   async deleteCapex2(idOrKey: any): Promise<boolean> {
     return this.deleteOutflowRecord('fss_outflow_capex_2', idOrKey, 'category');

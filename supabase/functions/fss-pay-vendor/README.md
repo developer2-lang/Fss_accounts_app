@@ -13,6 +13,8 @@ The IUOVA app uses a local role selector rather than Supabase Auth. Browser-side
 
 This proxy is development-only. Do not deploy the Vite server as a public production backend. Production access needs a server-side proxy or an authenticated identity provider.
 
+The Vercel deployment includes a root-level `/api/fss-pay-vendor` function that returns HTTP 410 without accessing Supabase. The app also blocks Pay a Vendor requests on non-loopback hosts. Keep the feature disabled in production until real user authentication and server-side role authorization are implemented; do not expose the Edge Function access token or service-role key to the browser.
+
 ## Configure and deploy
 
 1. Generate a random token with at least 32 bytes of entropy. Put the same value in the root `.env` as `FSS_EDGE_ACCESS_TOKEN` and in `supabase/.env.pay-vendor.local` as `FSS_EDGE_ACCESS_TOKEN=...`. This local secrets file is git-ignored.
