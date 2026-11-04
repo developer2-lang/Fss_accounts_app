@@ -3425,6 +3425,26 @@ export const SupabaseService = {
     return { operationReceipts, income, financing, cashInflow };
   },
 
+  async loadCashOutflowSummaryFromSupabase(): Promise<any[]> {
+    if (!supabase) return [];
+    const { data, error } = await supabase
+      .from('fss_cash_outflow')
+      .select('*')
+      .order('sort_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+
+  async loadCashflowStatementFromSupabase(): Promise<any[]> {
+    if (!supabase) return [];
+    const { data, error } = await supabase
+      .from('fss_cash_flow_statement')
+      .select('*')
+      .order('sort_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+
   /**
    * Saves or updates a row into public.fss_operation_receipts using primary key id
    */

@@ -743,6 +743,21 @@ export function convertFssTransactionToLocal(
   };
 }
 
+function refreshCashflowEntriesFromStore() {
+  if (!Store.data) return;
+  const transactionIds = new Set((Store.data.supabaseTransactionIds || []).map((id: any) => String(id)));
+  const auxiliaryIdFields = [
+    'supabase_tax_statutory_id',
+    'supabase_other_expense_id',
+    'supabase_client_payment_id',
+    'supabase_other_income_id'
+  ];
+  Store.data.cashflowEntries = (Store.data.entries || []).filter((entry: any) =>
+    (entry.supabase_id != null && transactionIds.has(String(entry.supabase_id))) ||
+    auxiliaryIdFields.some(field => entry[field] !== null && entry[field] !== undefined)
+  );
+}
+
 export const App: React.FC = () => {
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>({
     configured: isSupabaseConfigured,
@@ -772,11 +787,12 @@ export const App: React.FC = () => {
   const [showAddBankAccountModal, setShowAddBankAccountModal] = useState<boolean>(false);
   const [showAddCategoryModal, setShowAddCategoryModal] = useState<boolean>(false);
   const cashflowSummarySyncQueue = useRef<Promise<any[]>>(Promise.resolve([]));
+  const isHydratingSupabase = useRef(false);
 
   const syncCashOutflowSummary = useCallback(async () => {
     const sync = async () => {
       if (!Store.data) throw new Error('Cashflow data is not loaded.');
-      const { outflowRows: uiRows, statementRows } = getCashflowSummaryUiRows();
+      const { outflowRows: uiRows, statementRows } = getCashflowSummaryUiRows({ useStoredSummary: false });
       const uiRowsByName = new Map(uiRows.map(row => [String(row.category_name || '').trim().toLowerCase(), row]));
       const statementCategories = ['Operating costs', 'Project costs', 'Tax & statutory', 'Capex', 'Financing & owner'];
       const requiredMonths = CASH_OUTFLOW_MONTH_COLS.slice(3, 11);
@@ -1583,26 +1599,10 @@ export const App: React.FC = () => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let supabaseTransactions = await SupabaseService.loadTransactionsFromSupabase();
-
-      // If fss_table_transactions is empty in Supabase, auto-seed with local active entries
-      if (supabaseTransactions.length === 0 && Store.data?.entries) {
-        const validEntries = Store.data.entries.filter((e: any) => e.date && !e.deleted && e.type !== 'transfer');
-        if (validEntries.length > 0) {
-          console.log('fss_table_transactions table is empty in Supabase. Syncing existing entries to Supabase...');
-          await SupabaseService.syncLocalTransactionsToSupabase(
-            Store.data.entries,
-            Store.data.parties || [],
-            Store.data.projects || [],
-            Store.data.departments || [],
-            Store.data.categories || [],
-            Store.data.accounts || []
-          );
-          supabaseTransactions = await SupabaseService.loadTransactionsFromSupabase();
-        }
-      }
+      const supabaseTransactions = await SupabaseService.loadTransactionsFromSupabase();
 
       if (supabaseTransactions && Store.data?.entries) {
+        Store.data.supabaseTransactionIds = supabaseTransactions.map((transaction: any) => String(transaction.id));
         supabaseTransactions.forEach((st: any) => {
           const entryRecord = convertFssTransactionToLocal(
             st,
@@ -1768,9 +1768,15 @@ export const App: React.FC = () => {
             else Store.data.entries.unshift(entryRecord);
           }
         }
-        Store.persist();
+        refreshCashflowEntriesFromStore();
+        const wasHydratingSupabase = isHydratingSupabase.current;
+        isHydratingSupabase.current = true;
+        try {
+          Store.persist();
+        } finally {
+          isHydratingSupabase.current = wasHydratingSupabase;
+        }
         render({ keepScroll: true });
-        if (S?.cf) await syncCashOutflowSummary();
       }
 
       setCloudStatus(prev => ({
@@ -1792,11 +1798,18 @@ export const App: React.FC = () => {
   }, []);
 
   // Hydrate Cashflow Inflow from Supabase (fss_operation_receipts, fss_income, fss_financing, fss_cash_inflow, fss_outflow_oc_people)
-  const loadSupabaseCashflowTables = useCallback(async (opts?: { skipAutoSeed?: boolean }) => {
+  const loadSupabaseCashflowTables = useCallback(async (opts: { skipAutoSeed?: boolean } = { skipAutoSeed: true }) => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let [result, peopleRows, peopleReport, projectCostRows, capexRows, financingAndOwnerRows, officeFixedRows, officeVariableRows, travelRows, professionalAdminRows, taxStatutoryRows] = await Promise.all([
+      let cashflowLoadWarning: string | null = null;
+      const travelRowsPromise = SupabaseService.loadTravelFromSupabase().catch((err: any) => {
+        if (err?.code !== 'PGRST205') throw err;
+        cashflowLoadWarning = 'The optional fss_outflow_oc_travel table is missing from Supabase; other cashflow data loaded.';
+        console.warn(cashflowLoadWarning);
+        return [];
+      });
+      let [result, peopleRows, peopleReport, projectCostRows, capexRows, financingAndOwnerRows, officeFixedRows, officeVariableRows, travelRows, professionalAdminRows, taxStatutoryRows, cashOutflowSummaryRows, cashflowStatementRows] = await Promise.all([
         SupabaseService.loadAllCashflowInflowFromSupabase(),
         SupabaseService.loadPeopleFromSupabase(),
         SupabaseService.loadPeopleReportFromSupabase(),
@@ -1805,14 +1818,17 @@ export const App: React.FC = () => {
         SupabaseService.loadFinancingAndOwnerFromSupabase(),
         SupabaseService.loadOfficeFixedFromSupabase(),
         SupabaseService.loadOfficeVariableFromSupabase(),
-        SupabaseService.loadTravelFromSupabase(),
+        travelRowsPromise,
         SupabaseService.loadProfessionalAdminFromSupabase(),
-        SupabaseService.loadTaxStatutoryFromSupabase()
+        SupabaseService.loadTaxStatutoryFromSupabase(),
+        SupabaseService.loadCashOutflowSummaryFromSupabase(),
+        SupabaseService.loadCashflowStatementFromSupabase()
       ]);
 
       // If tables are empty in Supabase, auto-seed with computed local UI cashflow
       const currentFy = (typeof S !== 'undefined' && S.fy) ? S.fy : 2026;
       if (
+        !opts.skipAutoSeed &&
         result.operationReceipts.length === 0 &&
         result.income.length === 0 &&
         result.financing.length === 0 &&
@@ -1839,7 +1855,7 @@ export const App: React.FC = () => {
       let finalTravelRows = travelRows;
       let finalProfessionalAdminRows = professionalAdminRows;
       let finalTaxStatutoryRows = taxStatutoryRows;
-      if (finalPeopleRows.length === 0 && Store.data?.entries) {
+      if (!opts.skipAutoSeed && finalPeopleRows.length === 0 && Store.data?.entries) {
         const computedPeople = computeCashflowPeopleRows(Store.data.entries, currentFy);
         if (computedPeople) {
           const syncRes = await SupabaseService.syncPeopleToSupabase(computedPeople);
@@ -1922,7 +1938,7 @@ export const App: React.FC = () => {
         }
       }
       const allCapexNull = finalCapexRows.length > 0 && finalCapexRows.every((r: any) => ['jan_26','feb_26','mar_26','apr_26','may_26','jun_26','jul_26','aug_26','sep_26','oct_26','nov_26','dec_26'].every((m: string) => r[m] == null));
-      if ((finalCapexRows.length === 0 || allCapexNull) && Store.data?.entries) {
+      if (!opts.skipAutoSeed && (finalCapexRows.length === 0 || allCapexNull) && Store.data?.entries) {
         const computedCapex = computeCashflowOutflowCapexRows(Store.data.entries, currentFy);
         if (computedCapex) {
           const syncRes = await SupabaseService.syncCapexToSupabase(computedCapex.rows);
@@ -1930,7 +1946,7 @@ export const App: React.FC = () => {
         }
       }
       const allFinancingOwnerNull = finalFinancingAndOwnerRows.length > 0 && finalFinancingAndOwnerRows.every((r: any) => ['jan_26','feb_26','mar_26','apr_26','may_26','jun_26','jul_26','aug_26','sep_26','oct_26','nov_26','dec_26'].every((m: string) => r[m] == null));
-      if ((finalFinancingAndOwnerRows.length === 0 || allFinancingOwnerNull) && Store.data?.entries) {
+      if (!opts.skipAutoSeed && (finalFinancingAndOwnerRows.length === 0 || allFinancingOwnerNull) && Store.data?.entries) {
         const computedFinancingAndOwner = computeCashflowOutflowFinancingAndOwnerRows(Store.data.entries, currentFy);
         if (computedFinancingAndOwner) {
           const syncRes = await SupabaseService.syncFinancingAndOwnerToSupabase(computedFinancingAndOwner.rows);
@@ -1938,7 +1954,7 @@ export const App: React.FC = () => {
         }
       }
       const allOfficeFixedNull = finalOfficeFixedRows.length > 0 && finalOfficeFixedRows.every((r: any) => ['jan26','feb26','mar26','apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].every((m: string) => r[m] == null));
-      if ((finalOfficeFixedRows.length === 0 || allOfficeFixedNull) && Store.data?.entries) {
+      if (!opts.skipAutoSeed && (finalOfficeFixedRows.length === 0 || allOfficeFixedNull) && Store.data?.entries) {
         const computedOfficeFixed = computeCashflowOutflowOfficeFixedRows(Store.data.entries, currentFy);
         if (computedOfficeFixed) {
           const syncRes = await SupabaseService.syncOfficeFixedToSupabase(computedOfficeFixed.rows);
@@ -1946,7 +1962,7 @@ export const App: React.FC = () => {
         }
       }
       const allOfficeVariableNull = finalOfficeVariableRows.length > 0 && finalOfficeVariableRows.every((r: any) => ['jan26','feb26','mar26','apr26','may26','jun26','july26','aug26','sept26','oct26','nov26','dec26'].every((m: string) => r[m] == null));
-      if ((finalOfficeVariableRows.length === 0 || allOfficeVariableNull) && Store.data?.entries) {
+      if (!opts.skipAutoSeed && (finalOfficeVariableRows.length === 0 || allOfficeVariableNull) && Store.data?.entries) {
         const computedOfficeVariable = computeCashflowOutflowOfficeVariableRows(Store.data.entries, currentFy);
         if (computedOfficeVariable) {
           const syncRes = await SupabaseService.syncOfficeVariableToSupabase(computedOfficeVariable.rows);
@@ -2136,6 +2152,8 @@ export const App: React.FC = () => {
         Store.data.fss_outflow_oc_travel = finalTravelRows;
         Store.data.fss_outflow_oc_professional_admin = finalProfessionalAdminRows;
         Store.data.fss_outflow_tax_statutory = finalTaxStatutoryRows;
+        Store.data.fss_cash_outflow = cashOutflowSummaryRows;
+        Store.data.fss_cash_flow_statement = cashflowStatementRows;
 
         // Auto-heal if Supabase ever differs from UI (e.g. outdated fy_to_date, share, or jan_26 > 0)
         const computed = Store.data?.entries
@@ -2171,7 +2189,7 @@ export const App: React.FC = () => {
           })
         );
 
-        if (hasDiscrepancy && computed) {
+        if (!opts.skipAutoSeed && hasDiscrepancy && computed) {
           result = await SupabaseService.syncCashflowInflowToSupabase({
             operationReceipts: computed.operationReceiptsRows,
             income: computed.incomeRows,
@@ -2200,7 +2218,6 @@ export const App: React.FC = () => {
           throw new Error('The People report view does not match the People table for one or more months.');
         }
 
-        Store.data.fss_cash_outflow = await syncCashOutflowSummary();
         render({ keepScroll: true });
       }
 
@@ -2216,7 +2233,7 @@ export const App: React.FC = () => {
         projectCostCount: finalProjectCostRows.length,
         capexCount: finalCapexRows.length,
         lastSynced: new Date().toLocaleTimeString(),
-        error: null
+        error: cashflowLoadWarning
       }));
       return result;
     } catch (err: any) {
@@ -2231,22 +2248,27 @@ export const App: React.FC = () => {
 
   // Refresh all entities from Supabase
   const refreshAllFromSupabase = useCallback(async () => {
-    await Promise.all([
-      loadSupabaseClients(),
-      loadSupabaseDepartments()
-    ]);
-    await Promise.all([
-      loadSupabaseVendors(),
-      loadSupabaseEmployees(),
-      loadSupabaseOtherParties(),
-      loadSupabaseProjects(),
-      loadSupabaseBankAccounts(),
-      loadSupabaseCategories(),
-      loadSupabaseOrders(),
-      loadSupabaseTransactions()
-    ]);
-    await loadSupabaseCashflowTables();
-    await syncCashOutflowSummary();
+    const wasHydratingSupabase = isHydratingSupabase.current;
+    isHydratingSupabase.current = true;
+    try {
+      await Promise.all([
+        loadSupabaseClients(),
+        loadSupabaseDepartments()
+      ]);
+      await Promise.all([
+        loadSupabaseVendors(),
+        loadSupabaseEmployees(),
+        loadSupabaseOtherParties(),
+        loadSupabaseProjects(),
+        loadSupabaseBankAccounts(),
+        loadSupabaseCategories(),
+        loadSupabaseOrders(),
+        loadSupabaseTransactions()
+      ]);
+      await loadSupabaseCashflowTables();
+    } finally {
+      isHydratingSupabase.current = wasHydratingSupabase;
+    }
   }, [loadSupabaseClients, loadSupabaseVendors, loadSupabaseEmployees, loadSupabaseOtherParties, loadSupabaseProjects, loadSupabaseDepartments, loadSupabaseBankAccounts, loadSupabaseCategories, loadSupabaseOrders, loadSupabaseTransactions, loadSupabaseCashflowTables, syncCashOutflowSummary]);
 
   // Initialize Core Application and Supabase
@@ -2260,13 +2282,20 @@ export const App: React.FC = () => {
     const init = async () => {
       // 1. Boot original application engine
       try {
-        boot();
+        await boot();
         (window as any).Store = Store;
         (window as any).api = api;
         mergeSeedOtherPartiesLocally(getSeedOtherPartyMaster());
         render({ keepScroll: true });
       } catch (err) {
         console.error('Error during boot:', err);
+        setCloudStatus(prev => ({
+          ...prev,
+          connected: false,
+          syncing: false,
+          error: err instanceof Error ? err.message : String(err)
+        }));
+        return;
       }
 
       // 2. Register global Supabase client saver for the core UI form
@@ -2603,7 +2632,7 @@ export const App: React.FC = () => {
         if (!isSupabaseConfigured) return null;
         try {
           const currentFy = (typeof S !== 'undefined' && S.fy) ? S.fy : 2026;
-          const entriesList = Store.data?.entries || [];
+          const entriesList = Store.data?.cashflowEntries || Store.data?.entries || [];
           const officeFixedComputed = computeCashflowOutflowOfficeFixedRows(entriesList, currentFy);
           const officeVariableComputed = computeCashflowOutflowOfficeVariableRows(entriesList, currentFy);
           if (officeFixedComputed && Store.data) {
@@ -2777,7 +2806,8 @@ export const App: React.FC = () => {
       (window as any).__supabaseSyncCashflowInflow = triggerCashflowSync;
 
       (window as any).__onCashflowDataChanged = () => {
-        if (!isSupabaseConfigured || isSyncingCashflow) return;
+        if (!isSupabaseConfigured || isSyncingCashflow || isHydratingSupabase.current) return;
+        refreshCashflowEntriesFromStore();
         if (cashflowSyncSuppress) {
           // A Supabase-backed Cashflow write just happened (e.g. Project Costs cell update).
           // Do not trigger the entries-derived re-sync, otherwise it overwrites the saved Supabase value.
@@ -2808,6 +2838,14 @@ export const App: React.FC = () => {
             Store.data?.accounts || []
           );
           if (res) {
+            const localEntry = Store.data?.entries?.find((entry: any) => entry.id === entryData.id);
+            if (localEntry) {
+              localEntry.supabase_id = res.id;
+              const ids = new Set((Store.data?.supabaseTransactionIds || []).map((id: any) => String(id)));
+              ids.add(String(res.id));
+              Store.data.supabaseTransactionIds = [...ids];
+              refreshCashflowEntriesFromStore();
+            }
             setCloudStatus(prev => ({
               ...prev,
               transactionCount: (prev.transactionCount || 0) + 1,
@@ -2823,7 +2861,7 @@ export const App: React.FC = () => {
         // not wait behind unrelated tables or leave November stale.
         try {
           const currentFy = (typeof S !== 'undefined' && S.fy) ? S.fy : 2026;
-          const capexComputed = computeCashflowOutflowCapexRows(Store.data?.entries || [], currentFy);
+          const capexComputed = computeCashflowOutflowCapexRows(Store.data?.cashflowEntries || Store.data?.entries || [], currentFy);
           if (capexComputed) {
             await SupabaseService.syncCapex2ToSupabase(capexComputed.rows);
             const capexSynced = await SupabaseService.syncCapexToSupabase(capexComputed.rows);
@@ -2838,7 +2876,7 @@ export const App: React.FC = () => {
         // Persist Project Costs immediately from the same live entries used by the UI.
         try {
           const currentFy = (typeof S !== 'undefined' && S.fy) ? S.fy : 2026;
-          const projectCostComputed = computeCashflowOutflowProjectCostRows(Store.data?.entries || [], currentFy);
+          const projectCostComputed = computeCashflowOutflowProjectCostRows(Store.data?.cashflowEntries || Store.data?.entries || [], currentFy);
           if (projectCostComputed) {
             await SupabaseService.syncProjectCost2ToSupabase(projectCostComputed.rows);
             const projectCostSynced = await SupabaseService.syncProjectCostToSupabase(projectCostComputed.rows);
@@ -3477,22 +3515,26 @@ export const App: React.FC = () => {
         }
 
         if (isConn) {
-          await Promise.all([
-            loadSupabaseClients(),
-            loadSupabaseDepartments()
-          ]);
-          await Promise.all([
-            loadSupabaseVendors(),
-            loadSupabaseEmployees(),
-            loadSupabaseOtherParties(),
-            loadSupabaseProjects(),
-            loadSupabaseBankAccounts(),
-            loadSupabaseCategories(),
-            loadSupabaseOrders(),
-            loadSupabaseTransactions()
-          ]);
-          await loadSupabaseCashflowTables();
-          if (mounted) await syncCashOutflowSummary();
+          isHydratingSupabase.current = true;
+          try {
+            await Promise.all([
+              loadSupabaseClients(),
+              loadSupabaseDepartments()
+            ]);
+            await Promise.all([
+              loadSupabaseVendors(),
+              loadSupabaseEmployees(),
+              loadSupabaseOtherParties(),
+              loadSupabaseProjects(),
+              loadSupabaseBankAccounts(),
+              loadSupabaseCategories(),
+              loadSupabaseOrders(),
+              loadSupabaseTransactions()
+            ]);
+            await loadSupabaseCashflowTables();
+          } finally {
+            isHydratingSupabase.current = false;
+          }
         }
       }
     };

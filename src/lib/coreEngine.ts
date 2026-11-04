@@ -969,6 +969,7 @@ function buildSeed() {
   };
   for (const c of [...D.accounts, ...D.departments, ...D.categories]) { c.createdBy = 'u_owner'; c.createdAt = OPEN + 'T09:00:00.000Z'; }
   const P = (id, kind, name, extra = {}) => D.parties.push({ id, kind, name, gstin: '', gstType: 'none', departmentId: null, designation: '', monthlySalary: null, joinDate: null, email: '', phone: '', active: true, createdBy: 'u_owner', createdAt: OPEN + 'T09:00:00.000Z', ...extra });
+  const party = id => D.parties.find(p => p.id === id);
   [['cl_nw', 'Northwind Appliances Ltd', 'intra', '27AAACN4821K1Z2'], ['cl_vl', 'Veloce Electricals Pvt Ltd', 'inter', '24AABCV7712P1Z8'], ['cl_ar', 'Arcadia Home Products Ltd', 'inter', '29AAFCA3390M1Z1'], ['cl_md', 'Meridian Switchgear Ltd', 'intra', '27AADCM5561Q1Z6'], ['cl_sl', 'Solace Consumer Durables Ltd', 'inter', '07AAGCS2208H1Z3'], ['cl_ks', 'Kestrel Mobility Pvt Ltd', 'intra', '27AAHCK9034D1Z9'], ['cl_zp', 'Zephyr Lighting Co.', 'inter', '33AAJFZ6617B1Z4']]
     .forEach(([id, n, g, gst]) => P(id, 'client', n, { gstType: g, gstin: gst, email: 'accounts@' + n.split(' ')[0].toLowerCase() + '.example, projects@' + n.split(' ')[0].toLowerCase() + '.example' }));
   [['vn_landlord', 'Shreeji Realty LLP', 'intra'], ['vn_power', 'Metro Power Distribution', 'none'], ['vn_net', 'AirLink Fibernet Pvt Ltd', 'intra'], ['vn_soft', 'CloudSuite Software India Pvt Ltd', 'inter'], ['vn_clean', 'CleanPro Facility Services', 'intra'], ['vn_proto', 'ProtoWorks Rapid Prototyping', 'intra'], ['vn_cnc', 'Precision CNC Works', 'intra'], ['vn_lab', 'Lumen Test Labs Pvt Ltd', 'inter'], ['vn_courier', 'Swift Courier Services', 'none'], ['vn_office', 'OfficeMart Supplies', 'none'], ['vn_ca', 'Mehta & Associates (CA)', 'intra'], ['vn_legal', 'Kulkarni Legal LLP', 'intra'], ['vn_travel', 'TravelDesk Pvt Ltd', 'intra'], ['vn_fl_rohan', 'Rohan Desai (Freelance Visualiser)', 'none'], ['vn_fl_ananya', 'Ananya Iyer (Freelance UX)', 'none'], ['vn_hw', 'Techno Hardware Store', 'intra'], ['vn_wood', 'Woodcraft Interiors', 'intra'], ['vn_pantry', 'BrewCo Pantry Services', 'none']]
@@ -1042,7 +1043,6 @@ function buildSeed() {
     const last = ms[ms.length - 1][0];
     D.projects.push({ id, code, name, clientId: cl, departmentId: dep, contractValue: fee, startDate: addDays(ms[0][0], -21), status: last < TODAY ? 'completed' : 'active', active: true, createdBy: 'u_owner', createdAt: addDays(ms[0][0], -21) + 'T10:00:00.000Z' });
   });
-  const party = id => D.parties.find(p => p.id === id);
   const PRJX = [ // non-milestone projects: retainers, consulting one-offs, recent orders
     ['pr_ret_nw', 'RET-NW', 'Northwind design retainer', 'cl_nw', 'dep_design', '2025-03-20'],
     ['pr_ret_vl', 'RET-VL', 'Veloce engineering retainer', 'cl_vl', 'dep_eng', '2025-09-20'],
@@ -3608,8 +3608,13 @@ PAGES.cashflow = {
     const fy = S.fy, C = S.cf;
     const periods = fyPeriods(fy, C.period); const len = periods.length;
     const [fyF] = fyRange(fy); const lastTo = periods.length ? periods[len - 1].to : fyF;
-    const ents = Calc.inRange(fyF, lastTo).filter(e => e.type !== 'transfer');
-    const deletedCashKeys = deletedCategoryMonthKeys(Store.data?.entries, (e: any) => (api.get('categories', e.categoryId)?.name || e.category || ''));
+    const cashflowEntries = Array.isArray(Store.data?.cashflowEntries) ? Store.data.cashflowEntries : null;
+    const ents = cashflowEntries
+      ? cashflowEntries.filter((entry: any) =>
+        !entry.deleted && entry.date >= fyF && entry.date <= lastTo && entry.type !== 'transfer'
+      )
+      : Calc.inRange(fyF, lastTo).filter(e => e.type !== 'transfer');
+    const deletedCashKeys = deletedCategoryMonthKeys(cashflowEntries || Store.data?.entries, (e: any) => (api.get('categories', e.categoryId)?.name || e.category || ''));
     const scope = 'cf:' + C.by + ':';
     let tree = {};
     for (const type of ['inflow', 'outflow']) {
@@ -4022,27 +4027,75 @@ PAGES.cashflow = {
     const accNode = { key: scope + 'acc', label: 'Closing balance by account', vals: periods.map(() => 0), children: api.list('accounts').map(a => ({ key: scope + 'acc:' + a.id, label: a.name, vals: periods.map(p => Calc.balance(a.id, p.to < TODAY ? p.to : TODAY)), bal: true })) };
     const allNodes = [...tree.inflow, ...tree.outflow];
     prepareTree(scope, allNodes);
-    const levels = C.by === 'category' ? [['summary', 'Summary'], ['1', 'Groups'], ['all', 'All lines']] : [['summary', 'Departments'], ['all', 'With buckets']];
-    const tin = periods.map((_, i) => sum(tree.inflow, n => n.vals[i])), tout = periods.map((_, i) => sum(tree.outflow, n => n.vals[i]));
-    const TIN = sum(tin), TOUT = sum(tout);
-    const netCashFlow = tin.map((cashInflow, index) => r2(cashInflow - tout[index]));
-    const NET = sum(netCashFlow);
-    const opening: number[] = [];
-    const closing: number[] = [];
-    periods.forEach((period, index) => {
-      const openingBalance = index === 0
-        ? Calc.cash(addDays(period.from, -1))
-        : closing[index - 1];
-      const closingBalance = r2(openingBalance + netCashFlow[index]);
-      opening.push(openingBalance);
-      closing.push(closingBalance);
-    });
     const M_COL_MAP: Record<string, string> = {
       '01': 'jan_26', '02': 'feb_26', '03': 'mar_26',
       '04': 'apr_26', '05': 'may_26', '06': 'jun_26',
       '07': 'jul_26', '08': 'aug_26', '09': 'sep_26',
       '10': 'oct_26', '11': 'nov_26', '12': 'dec_26'
     };
+    const storedSummaryEnabled = (window as any).__cashflowUseStoredSummary !== false
+      && S.fy === 2026 && C.by === 'category' && C.period === 'monthly';
+    const storedOutflowByName = new Map(
+      (Store.data?.fss_cash_outflow || []).map((row: any) => [
+        String(row.category_name || '').trim().toLowerCase(),
+        row
+      ])
+    );
+    const storedStatementByName = new Map(
+      (Store.data?.fss_cash_flow_statement || []).map((row: any) => [
+        String(row.category_name || '').trim().toLowerCase(),
+        row
+      ])
+    );
+    const valueFromStoredRow = (row: any, period: any): number | null => {
+      if (!row || period.months.length !== 1) return null;
+      const month = String(period.months[0] || '').slice(5, 7);
+      const column = M_COL_MAP[month];
+      const value = column ? row[column] : null;
+      if (value === null || value === undefined || value === '') return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    };
+    const valuesFromStatement = (categoryName: string, computed: number[]): number[] => {
+      if (!storedSummaryEnabled) return computed;
+      const row = storedStatementByName.get(categoryName.toLowerCase());
+      if (!row) return computed;
+      return periods.map((period, index) => valueFromStoredRow(row, period) ?? computed[index]);
+    };
+    if (storedSummaryEnabled) {
+      for (const node of tree.outflow) {
+        const row = storedOutflowByName.get(String(node.label || '').trim().toLowerCase());
+        if (!row) continue;
+        node.vals = periods.map((period: any, index: number) => valueFromStoredRow(row, period) ?? node.vals[index]);
+      }
+    }
+    const levels = C.by === 'category' ? [['summary', 'Summary'], ['1', 'Groups'], ['all', 'All lines']] : [['summary', 'Departments'], ['all', 'With buckets']];
+    const computedTin = periods.map((_, i) => sum(tree.inflow, n => n.vals[i]));
+    const computedTout = periods.map((_, i) => sum(tree.outflow, n => n.vals[i]));
+    const tin = valuesFromStatement('Cash Inflow', computedTin);
+    const tout = valuesFromStatement('Cash Outflow', computedTout);
+    const storedFyToDate = (categoryName: string, fallback: number): number => {
+      if (!storedSummaryEnabled) return fallback;
+      const value = storedStatementByName.get(categoryName.toLowerCase())?.fy_to_date;
+      return value !== null && value !== undefined && Number.isFinite(Number(value)) ? Number(value) : fallback;
+    };
+    const TIN = storedFyToDate('Cash Inflow', sum(tin));
+    const TOUT = storedFyToDate('Cash Outflow', sum(tout));
+    const computedNetCashFlow = tin.map((cashInflow, index) => r2(cashInflow - tout[index]));
+    const netCashFlow = valuesFromStatement('Net Cash Flow', computedNetCashFlow);
+    const NET = storedFyToDate('Net Cash Flow', sum(netCashFlow));
+    const computedOpening: number[] = [];
+    const computedClosing: number[] = [];
+    periods.forEach((period, index) => {
+      const openingBalance = index === 0
+        ? Calc.cash(addDays(period.from, -1))
+        : computedClosing[index - 1];
+      const closingBalance = r2(openingBalance + computedNetCashFlow[index]);
+      computedOpening.push(openingBalance);
+      computedClosing.push(closingBalance);
+    });
+    const opening = valuesFromStatement('Opening Balance', computedOpening);
+    const closing = valuesFromStatement('Closing Balance', computedClosing);
     if (C.by === 'category' && C.period === 'monthly') {
       const statementLabels = new Set([
         'Operating costs', 'Project costs', 'Tax & statutory', 'Capex', 'Financing & owner'
@@ -4314,16 +4367,18 @@ PAGES.cashflow = {
   },
 };
 
-export function getCashflowSummaryUiRows(): { outflowRows: any[]; statementRows: any[] } {
+export function getCashflowSummaryUiRows(options: { useStoredSummary?: boolean } = {}): { outflowRows: any[]; statementRows: any[] } {
   if (typeof window === 'undefined' || !S.cf) return { outflowRows: [], statementRows: [] };
   const previousPeriod = S.cf.period;
   const previousGrouping = S.cf.by;
+  const previousUseStoredSummary = (window as any).__cashflowUseStoredSummary;
   const previousOpen = [...OPEN];
   const previousSeenScopes = [...SEEN_SCOPES];
   const previousLevelRequests = { ...LEVEL_REQ };
   try {
     S.cf.period = 'monthly';
     S.cf.by = 'category';
+    (window as any).__cashflowUseStoredSummary = options.useStoredSummary !== false;
     (window as any).__cashflowOutflowSummaryUiRows = [];
     (window as any).__cashflowStatementUiRows = [];
     PAGES.cashflow.render();
@@ -4334,6 +4389,11 @@ export function getCashflowSummaryUiRows(): { outflowRows: any[]; statementRows:
   } finally {
     S.cf.period = previousPeriod;
     S.cf.by = previousGrouping;
+    if (previousUseStoredSummary === undefined) {
+      delete (window as any).__cashflowUseStoredSummary;
+    } else {
+      (window as any).__cashflowUseStoredSummary = previousUseStoredSummary;
+    }
     OPEN.clear();
     previousOpen.forEach(key => OPEN.add(key));
     SEEN_SCOPES.clear();
@@ -6358,26 +6418,25 @@ function bindGlobal() {
   });
   window.addEventListener('hashchange', route);
 }
-let _booted = false;
-async function boot() {
-  if (_booted) {
+let _bootPromise: Promise<void> | null = null;
+function boot(): Promise<void> {
+  if (_bootPromise) return _bootPromise;
+  _bootPromise = (async () => {
+    Hooks.notify = toast;
+    const loaded = Store.load() && Store.data;
+    if (!loaded || (Store.data.meta?.testData && Store.data.meta?.schemaVersion !== 9)) await resetToTestData();
+    else if (Store.data.meta?.schemaVersion !== 9) { Object.assign(Store.data, { orders: Store.data.orders || [], pis: Store.data.pis || [], targets: Store.data.targets || {}, emails: Store.data.emails || [] }); emailSettings(); (Store.data.parties || []).forEach(normalizeParty); featureSettings(); Store.data.meta.schemaVersion = 9; Store.persist(); }
+    featureSettings();
+    $('#menuBtn').innerHTML = icon('menu'); $('#menuBtn').dataset.act = 'open-side';
+    $('#addBtn').innerHTML = icon('plus') + 'Add entry'; $('#addBtn').dataset.act = 'add-entry'; $('#addBtn').title = 'Add entry (N)';
+    $('#fab').innerHTML = icon('plus'); $('#fab').dataset.act = 'add-entry';
+    $('#bottomNav').innerHTML = [['dashboard', 'Home', 'dash'], ['ledger', 'Entries', 'list'], null, ['reports', 'Reports', 'chart'], ['more', 'More', 'menu']].map(x => x ? (x[0] === 'more' ? `<a href="#" data-act="open-side" data-p="more">${icon(x[2])}${x[1]}</a>` : `<a href="#/${x[0]}" data-p="${x[0]}">${icon(x[2])}${x[1]}</a>`) : '<span class="gap"></span>').join('');
+    bindGlobal();
     route();
-    return;
-  }
-  _booted = true;
-  Hooks.notify = toast;
-  const loaded = Store.load() && Store.data;
-  if (!loaded || (Store.data.meta?.testData && Store.data.meta?.schemaVersion !== 9)) await resetToTestData();
-  else if (Store.data.meta?.schemaVersion !== 9) { Object.assign(Store.data, { orders: Store.data.orders || [], pis: Store.data.pis || [], targets: Store.data.targets || {}, emails: Store.data.emails || [] }); emailSettings(); (Store.data.parties || []).forEach(normalizeParty); featureSettings(); Store.data.meta.schemaVersion = 9; Store.persist(); }
-  featureSettings();
-  $('#menuBtn').innerHTML = icon('menu'); $('#menuBtn').dataset.act = 'open-side';
-  $('#addBtn').innerHTML = icon('plus') + 'Add entry'; $('#addBtn').dataset.act = 'add-entry'; $('#addBtn').title = 'Add entry (N)';
-  $('#fab').innerHTML = icon('plus'); $('#fab').dataset.act = 'add-entry';
-  $('#bottomNav').innerHTML = [['dashboard', 'Home', 'dash'], ['ledger', 'Entries', 'list'], null, ['reports', 'Reports', 'chart'], ['more', 'More', 'menu']].map(x => x ? (x[0] === 'more' ? `<a href="#" data-act="open-side" data-p="more">${icon(x[2])}${x[1]}</a>` : `<a href="#/${x[0]}" data-p="${x[0]}">${icon(x[2])}${x[1]}</a>`) : '<span class="gap"></span>').join('');
-  bindGlobal();
-  route();
-  setTimeout(async () => { await runAutomations(); if (S.page === 'dashboard' || ['pis', 'outbox'].includes(S.page)) render({ keepScroll: true }); }, 400);
-  setInterval(runAutomations, 3600e3);
+    setTimeout(async () => { await runAutomations(); if (S.page === 'dashboard' || ['pis', 'outbox'].includes(S.page)) render({ keepScroll: true }); }, 400);
+    setInterval(runAutomations, 3600e3);
+  })();
+  return _bootPromise;
 }
 
 /* ============================ ORDERS, PIs, TARGETS ============================ */
