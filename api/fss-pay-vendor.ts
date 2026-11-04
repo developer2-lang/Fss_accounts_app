@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 const json = (response: ServerResponse, status: number, body: Record<string, unknown>) => {
@@ -46,36 +45,12 @@ export default async function handler(request: IncomingMessage, response: Server
     }
   }
 
-  const authorization = request.headers.authorization || '';
-  const accessToken = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!accessToken) {
-    json(response, 401, { error: 'Sign in with your Supabase account to use Pay a Vendor.' });
-    return;
-  }
-
   const supabaseUrl = process.env.VITE_SUPABASE_2_URL || process.env.VITE_SUPABASE_URL;
   const anonKey = process.env.VITE_SUPABASE_2_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
   const edgeAccessToken = process.env.FSS_EDGE_ACCESS_TOKEN;
-  const allowedEmails = (process.env.FSS_PAY_VENDOR_ALLOWED_EMAILS || '')
-    .split(',')
-    .map(email => email.trim().toLowerCase())
-    .filter(Boolean);
 
-  if (!supabaseUrl || !anonKey || !edgeAccessToken || edgeAccessToken.length < 32 || allowedEmails.length === 0) {
-    json(response, 503, { error: 'Pay a Vendor authentication is not fully configured on the server.' });
-    return;
-  }
-
-  const authClient = createClient(supabaseUrl, anonKey, {
-    auth: { autoRefreshToken: false, persistSession: false }
-  });
-  const { data: { user }, error: authError } = await authClient.auth.getUser(accessToken);
-  if (authError || !user?.email || !user.email_confirmed_at) {
-    json(response, 401, { error: 'Your Supabase session is invalid or your email is not verified. Sign in again.' });
-    return;
-  }
-  if (!allowedEmails.includes(user.email.toLowerCase())) {
-    json(response, 403, { error: 'Your Supabase account is not authorized to use Pay a Vendor.' });
+  if (!supabaseUrl || !anonKey || !edgeAccessToken || edgeAccessToken.length < 32) {
+    json(response, 503, { error: 'Pay a Vendor server access is not fully configured.' });
     return;
   }
 

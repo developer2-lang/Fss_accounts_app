@@ -5035,10 +5035,6 @@ async function saveEntryFromForm(F) {
   const errs = api.validateEntry(api.normaliseEntry(input));
   if (F.mode === 'edit' && api.isLocked(F.v.date)) errs.date = 'Locked month';
   if (Object.keys(errs).length) { const e = new Error(Object.values(errs)[0]); e.fields = errs; throw e; }
-  if (F.kind === 'vendor' && typeof window !== 'undefined' && typeof (window as any).__supabaseEnsurePayVendorAuth === 'function') {
-    const authenticated = await (window as any).__supabaseEnsurePayVendorAuth();
-    if (!authenticated) throw new Error('Sign in with the authorized Supabase account, then save the vendor payment again.');
-  }
   const metas = [];
   for (const fl of F.newFiles) {
     const id = uid('f'); const meta = { id, name: fl.name, type: fl.type, size: fl.size };
