@@ -744,7 +744,7 @@ export const SupabaseService = {
    * Loads all clients from fss_client joined with contacts from fss_client_people
    */
   async loadClientsFromSupabase(): Promise<any[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('Supabase is not configured; cannot load clients.');
     try {
       const { data: clients, error: clientErr } = await supabase
         .from('fss_client')
@@ -752,8 +752,7 @@ export const SupabaseService = {
         .order('created_at', { ascending: false });
 
       if (clientErr) {
-        console.warn('Error fetching fss_client:', clientErr.message);
-        return [];
+        throw new Error(`Failed to load clients from Supabase: ${clientErr.message}`);
       }
       if (!clients || !clients.length) return [];
 
@@ -761,9 +760,7 @@ export const SupabaseService = {
         .from('fss_client_people')
         .select('*');
 
-      if (peopleErr) {
-        console.warn('Error fetching fss_client_people:', peopleErr.message);
-      }
+      if (peopleErr) throw new Error(`Failed to load client contacts from Supabase: ${peopleErr.message}`);
 
       const peopleByClient: Record<string, any[]> = {};
       (people || []).forEach((p: any) => {
@@ -777,7 +774,7 @@ export const SupabaseService = {
       }));
     } catch (err) {
       console.error('Error in loadClientsFromSupabase:', err);
-      return [];
+      throw err;
     }
   },
 
@@ -954,7 +951,7 @@ export const SupabaseService = {
    * Loads all vendors from fss_vendor joined with contacts from fss_vendor_people
    */
   async loadVendorsFromSupabase(): Promise<any[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('Supabase is not configured; cannot load vendors.');
     try {
       const { data: vendors, error: vendorErr } = await supabase
         .from('fss_vendor')
@@ -1118,7 +1115,7 @@ export const SupabaseService = {
    * Loads all employees from fss_employe
    */
   async loadEmployeesFromSupabase(): Promise<any[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('Supabase is not configured; cannot load employees.');
     try {
       const { data: employees, error: empErr } = await supabase
         .from('fss_employe')
@@ -1126,13 +1123,12 @@ export const SupabaseService = {
         .order('name', { ascending: true });
 
       if (empErr) {
-        console.warn('Error fetching fss_employe:', empErr.message);
-        return [];
+        throw new Error(`Failed to load employees from Supabase: ${empErr.message}`);
       }
       return employees || [];
     } catch (err) {
       console.error('Error in loadEmployeesFromSupabase:', err);
-      return [];
+      throw err;
     }
   },
 
@@ -1284,7 +1280,7 @@ export const SupabaseService = {
    * Loads all other parties from fss_other_parties
    */
   async loadOtherPartiesFromSupabase(): Promise<any[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('Supabase is not configured; cannot load other parties.');
     try {
       const { data: parties, error: partyErr } = await supabase
         .from('fss_other_parties')
@@ -1292,13 +1288,12 @@ export const SupabaseService = {
         .order('id', { ascending: true });
 
       if (partyErr) {
-        console.warn('Error fetching fss_other_parties:', partyErr.message);
-        return [];
+        throw new Error(`Failed to load other parties from Supabase: ${partyErr.message}`);
       }
       return parties || [];
     } catch (err) {
       console.error('Error in loadOtherPartiesFromSupabase:', err);
-      return [];
+      throw err;
     }
   },
 
@@ -1538,7 +1533,7 @@ export const SupabaseService = {
    * Loads all projects from fss_projects
    */
   async loadProjectsFromSupabase(): Promise<any[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('Supabase is not configured; cannot load projects.');
     try {
       const { data: projects, error: projErr } = await supabase
         .from('fss_projects')
@@ -1546,13 +1541,12 @@ export const SupabaseService = {
         .order('project_code', { ascending: true });
 
       if (projErr) {
-        console.warn('Error fetching fss_projects:', projErr.message);
-        return [];
+        throw new Error(`Failed to load projects from Supabase: ${projErr.message}`);
       }
       return projects || [];
     } catch (err) {
       console.error('Error in loadProjectsFromSupabase:', err);
-      return [];
+      throw err;
     }
   },
 
@@ -1805,7 +1799,7 @@ export const SupabaseService = {
    * Loads all departments from fss_departments
    */
   async loadDepartmentsFromSupabase(): Promise<any[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('Supabase is not configured; cannot load departments.');
     try {
       const { data: depts, error: deptErr } = await supabase
         .from('fss_departments')
@@ -1813,13 +1807,12 @@ export const SupabaseService = {
         .order('id', { ascending: true });
 
       if (deptErr) {
-        console.warn('Error fetching fss_departments:', deptErr.message);
-        return [];
+        throw new Error(`Failed to load departments from Supabase: ${deptErr.message}`);
       }
       return depts || [];
     } catch (err) {
       console.error('Error in loadDepartmentsFromSupabase:', err);
-      return [];
+      throw err;
     }
   },
 
@@ -1989,7 +1982,7 @@ export const SupabaseService = {
    * Loads all bank accounts from fss_bank_accounts
    */
   async loadBankAccountsFromSupabase(): Promise<any[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('Supabase is not configured; cannot load bank accounts.');
     try {
       const { data: accounts, error: accErr } = await supabase
         .from('fss_bank_accounts')
@@ -1997,13 +1990,12 @@ export const SupabaseService = {
         .order('id', { ascending: true });
 
       if (accErr) {
-        console.warn('Error fetching fss_bank_accounts:', accErr.message);
-        return [];
+        throw new Error(`Failed to load bank accounts from Supabase: ${accErr.message}`);
       }
       return accounts || [];
     } catch (err) {
       console.error('Error in loadBankAccountsFromSupabase:', err);
-      return [];
+      throw err;
     }
   },
 
@@ -2474,7 +2466,7 @@ export const SupabaseService = {
    * Loads all categories from fss_categories with lookup joins
    */
   async loadCategoriesFromSupabase(): Promise<any[]> {
-    if (!supabase) return [];
+    if (!supabase) throw new Error('Supabase is not configured; cannot load categories.');
     try {
       const { data: cats, error: catErr } = await supabase
         .from('fss_categories')
@@ -2482,13 +2474,12 @@ export const SupabaseService = {
         .order('id', { ascending: true });
 
       if (catErr) {
-        console.warn('Error fetching fss_categories:', catErr.message);
-        return [];
+        throw new Error(`Failed to load categories from Supabase: ${catErr.message}`);
       }
       return cats || [];
     } catch (err) {
       console.error('Error in loadCategoriesFromSupabase:', err);
-      return [];
+      throw err;
     }
   },
 

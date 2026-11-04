@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { boot, go, route, render, S, api, Store, FileStore, getSeedProjectMaster, getSeedOtherPartyMaster, getCashflowSummaryUiRows, computeCashflowInflowRows, computeCashflowPeopleRows, computeCashflowOutflowProjectCostRows, computeCashflowOutflowCapexRows, computeCashflowOutflowFinancingAndOwnerRows, computeCashflowOutflowOfficeFixedRows, computeCashflowOutflowOfficeVariableRows, computeCashflowOutflowTravelRows, computeCashflowOutflowProfessionalAdminRows, computeCashflowOutflowTaxStatutoryRows } from './lib/coreEngine';
+import { boot, go, route, render, S, api, Store, FileStore, getCashflowSummaryUiRows, computeCashflowInflowRows, computeCashflowPeopleRows, computeCashflowOutflowProjectCostRows, computeCashflowOutflowCapexRows, computeCashflowOutflowFinancingAndOwnerRows, computeCashflowOutflowOfficeFixedRows, computeCashflowOutflowOfficeVariableRows, computeCashflowOutflowTravelRows, computeCashflowOutflowProfessionalAdminRows, computeCashflowOutflowTaxStatutoryRows } from './lib/coreEngine';
 import { SupabaseService, isSupabaseConfigured, STATE_NAME_TO_CODE, STATE_CODE_TO_NAME } from './lib/supabase';
 import { AddClientModal } from './components/AddClientModal';
 import { AddVendorModal } from './components/AddVendorModal';
@@ -11,71 +11,27 @@ import { AddBankAccountModal } from './components/AddBankAccountModal';
 import { AddCategoryModal } from './components/AddCategoryModal';
 import './styles/index.css';
 
-const PROJECT_MASTER_MIGRATION_KEY = 'fss-project-master-html-v1';
-let projectMasterMigrationComplete = false;
-let projectMasterMigrationPromise: Promise<any[]> | null = null;
-const OTHER_PARTY_MASTER_MIGRATION_KEY = 'fss-other-party-master-html-v1';
-let otherPartyMasterMigrationComplete = false;
-let otherPartyMasterMigrationPromise: Promise<any[]> | null = null;
-
-function isProjectMasterMigrationComplete() {
-  if (projectMasterMigrationComplete) return true;
-  try {
-    return window.localStorage.getItem(PROJECT_MASTER_MIGRATION_KEY) === 'complete';
-  } catch (error) {
-    console.warn('Could not read the project-master migration marker:', error);
-    return false;
-  }
-}
-
-function markProjectMasterMigrationComplete() {
-  projectMasterMigrationComplete = true;
-  try {
-    window.localStorage.setItem(PROJECT_MASTER_MIGRATION_KEY, 'complete');
-  } catch (error) {
-    console.warn('Could not persist the project-master migration marker:', error);
-  }
-}
-
-function isOtherPartyMasterMigrationComplete() {
-  if (otherPartyMasterMigrationComplete) return true;
-  try {
-    return window.localStorage.getItem(OTHER_PARTY_MASTER_MIGRATION_KEY) === 'complete';
-  } catch (error) {
-    console.warn('Could not read the Other parties migration marker:', error);
-    return false;
-  }
-}
-
-function markOtherPartyMasterMigrationComplete() {
-  otherPartyMasterMigrationComplete = true;
-  try {
-    window.localStorage.setItem(OTHER_PARTY_MASTER_MIGRATION_KEY, 'complete');
-  } catch (error) {
-    console.warn('Could not persist the Other parties migration marker:', error);
-  }
-}
-
-function mergeSeedOtherPartiesLocally(seedParties: any[]) {
-  if (!Store.data?.parties) return;
-  const seedByName = new Map(seedParties.map((party: any) => [String(party.name || '').trim().toLowerCase(), party]));
-  const mergedNames = new Set<string>();
-  Store.data.parties = Store.data.parties.map((party: any) => {
-    if (party.kind !== 'other') return party;
-    const key = String(party.name || '').trim().toLowerCase();
-    const seedParty = seedByName.get(key);
-    if (!seedParty) return party;
-    mergedNames.add(key);
-    return { ...party, ...seedParty, id: party.id, supabase_id: party.supabase_id };
+function replaceMasterRows(
+  localRows: any[],
+  supabaseRows: any[],
+  convert: (row: any) => any,
+  matches: (local: any, remote: any) => boolean
+) {
+  const usedLocalRows = new Set<any>();
+  const mappedRows = (supabaseRows || []).map((remote, remoteIndex) => {
+    const local = (localRows || []).find(candidate => !usedLocalRows.has(candidate) && matches(candidate, remote));
+    if (local) usedLocalRows.add(local);
+    const converted = convert(remote);
+    return {
+      ...converted,
+      id: local?.id ?? converted.id,
+      supabase_id: remote.id,
+      _localOrder: local ? localRows.indexOf(local) : localRows.length + remoteIndex
+    };
   });
-  seedParties.forEach((party: any) => {
-    const key = String(party.name || '').trim().toLowerCase();
-    if (!mergedNames.has(key)) {
-      Store.data.parties.unshift({ ...party });
-      mergedNames.add(key);
-    }
-  });
-  Store.persist();
+  return mappedRows
+    .sort((a, b) => a._localOrder - b._localOrder)
+    .map(({ _localOrder, ...row }) => row);
 }
 
 export interface CloudStatus {
@@ -1031,30 +987,19 @@ export const App: React.FC = () => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let supabaseClients = await SupabaseService.loadClientsFromSupabase();
-
-      // If fss_client is empty in Supabase, auto-seed with local active clients
-      if (supabaseClients.length === 0 && Store.data?.parties) {
-        const clientParties = Store.data.parties.filter((p: any) => p.kind === 'client');
-        if (clientParties.length > 0) {
-          console.log('fss_client table is empty in Supabase. Syncing existing clients to Supabase...');
-          await SupabaseService.syncLocalClientsToSupabase(Store.data.parties);
-          supabaseClients = await SupabaseService.loadClientsFromSupabase();
-        }
-      }
+      const supabaseClients = await SupabaseService.loadClientsFromSupabase();
 
       if (supabaseClients && Store.data?.parties) {
-        supabaseClients.forEach((sc: any) => {
-          const partyRecord = convertFssClientToParty(sc, sc.people);
-          const existingIdx = Store.data.parties.findIndex(
-            (p: any) => p.id === sc.id || (p.kind === 'client' && p.name.trim().toLowerCase() === sc.client_name.trim().toLowerCase())
-          );
-          if (existingIdx >= 0) {
-            Store.data.parties[existingIdx] = { ...Store.data.parties[existingIdx], ...partyRecord };
-          } else {
-            Store.data.parties.unshift(partyRecord);
-          }
-        });
+        const localClients = Store.data.parties.filter((party: any) => party.kind === 'client');
+        const cloudClients = replaceMasterRows(
+          localClients,
+          supabaseClients,
+          (client: any) => convertFssClientToParty(client, client.people),
+          (local: any, remote: any) => local.supabase_id === remote.id ||
+            local.id === remote.id ||
+            String(local.name || '').trim().toLowerCase() === String(remote.client_name || '').trim().toLowerCase()
+        );
+        Store.data.parties = [...Store.data.parties.filter((party: any) => party.kind !== 'client'), ...cloudClients];
         Store.persist();
         render({ keepScroll: true });
       }
@@ -1082,30 +1027,19 @@ export const App: React.FC = () => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let supabaseVendors = await SupabaseService.loadVendorsFromSupabase();
-
-      // If fss_vendor is empty in Supabase, auto-seed with local active vendors
-      if (supabaseVendors.length === 0 && Store.data?.parties) {
-        const vendorParties = Store.data.parties.filter((p: any) => p.kind === 'vendor');
-        if (vendorParties.length > 0) {
-          console.log('fss_vendor table is empty in Supabase. Syncing existing vendors to Supabase...');
-          await SupabaseService.syncLocalVendorsToSupabase(Store.data.parties);
-          supabaseVendors = await SupabaseService.loadVendorsFromSupabase();
-        }
-      }
+      const supabaseVendors = await SupabaseService.loadVendorsFromSupabase();
 
       if (supabaseVendors && Store.data?.parties) {
-        supabaseVendors.forEach((sv: any) => {
-          const partyRecord = convertFssVendorToParty(sv, sv.people);
-          const existingIdx = Store.data.parties.findIndex(
-            (p: any) => p.id === sv.id || (p.kind === 'vendor' && p.name.trim().toLowerCase() === sv.vendor_name.trim().toLowerCase())
-          );
-          if (existingIdx >= 0) {
-            Store.data.parties[existingIdx] = { ...Store.data.parties[existingIdx], ...partyRecord };
-          } else {
-            Store.data.parties.unshift(partyRecord);
-          }
-        });
+        const localVendors = Store.data.parties.filter((party: any) => party.kind === 'vendor');
+        const cloudVendors = replaceMasterRows(
+          localVendors,
+          supabaseVendors,
+          (vendor: any) => convertFssVendorToParty(vendor, vendor.people),
+          (local: any, remote: any) => local.supabase_id === remote.id ||
+            local.id === remote.id ||
+            String(local.name || '').trim().toLowerCase() === String(remote.vendor_name || '').trim().toLowerCase()
+        );
+        Store.data.parties = [...Store.data.parties.filter((party: any) => party.kind !== 'vendor'), ...cloudVendors];
         Store.persist();
         render({ keepScroll: true });
       }
@@ -1133,35 +1067,19 @@ export const App: React.FC = () => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let supabaseEmployees = await SupabaseService.loadEmployeesFromSupabase();
-
-      // If fss_employe is empty in Supabase, auto-seed with local active employees
-      if (supabaseEmployees.length === 0 && Store.data?.parties) {
-        const empParties = Store.data.parties.filter((p: any) => p.kind === 'employee');
-        if (empParties.length > 0) {
-          console.log('fss_employe table is empty in Supabase. Syncing existing employees to Supabase...');
-          await SupabaseService.syncLocalEmployeesToSupabase(Store.data.parties, Store.data.departments || []);
-          supabaseEmployees = await SupabaseService.loadEmployeesFromSupabase();
-        }
-      }
+      const supabaseEmployees = await SupabaseService.loadEmployeesFromSupabase();
 
       if (supabaseEmployees && Store.data?.parties) {
-        supabaseEmployees.forEach((se: any) => {
-          const partyRecord = convertFssEmployeToParty(se, Store.data.departments || []);
-          const existingIdx = Store.data.parties.findIndex(
-            (p: any) => (p.supabase_id && p.supabase_id === se.id) ||
-                        (p.kind === 'employee' && p.name.trim().toLowerCase() === se.name.trim().toLowerCase())
-          );
-          if (existingIdx >= 0) {
-            Store.data.parties[existingIdx] = {
-              ...Store.data.parties[existingIdx],
-              ...partyRecord,
-              id: Store.data.parties[existingIdx].id // preserve existing id (e.g. em_aditya) for linked entries
-            };
-          } else {
-            Store.data.parties.unshift(partyRecord);
-          }
-        });
+        const localEmployees = Store.data.parties.filter((party: any) => party.kind === 'employee');
+        const cloudEmployees = replaceMasterRows(
+          localEmployees,
+          supabaseEmployees,
+          (employee: any) => convertFssEmployeToParty(employee, Store.data.departments || []),
+          (local: any, remote: any) => local.supabase_id === remote.id ||
+            local.id === String(remote.id) ||
+            String(local.name || '').trim().toLowerCase() === String(remote.name || '').trim().toLowerCase()
+        );
+        Store.data.parties = [...Store.data.parties.filter((party: any) => party.kind !== 'employee'), ...cloudEmployees];
         Store.persist();
         render({ keepScroll: true });
       }
@@ -1186,57 +1104,23 @@ export const App: React.FC = () => {
 
   // Hydrate other parties from Supabase fss_other_parties
   const loadSupabaseOtherParties = useCallback(async () => {
-    const seedOtherParties = getSeedOtherPartyMaster();
-    mergeSeedOtherPartiesLocally(seedOtherParties);
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let supabaseOtherParties = await SupabaseService.loadOtherPartiesFromSupabase();
-
-      if (!isOtherPartyMasterMigrationComplete()) {
-        if (!otherPartyMasterMigrationPromise) {
-          const reconciliation = SupabaseService.syncSeedOtherPartiesToSupabase(seedOtherParties, Store.data?.parties || []);
-          otherPartyMasterMigrationPromise = reconciliation;
-          reconciliation.catch(() => {
-            if (otherPartyMasterMigrationPromise === reconciliation) otherPartyMasterMigrationPromise = null;
-          });
-        }
-        await otherPartyMasterMigrationPromise;
-        supabaseOtherParties = await SupabaseService.loadOtherPartiesFromSupabase();
-      }
-
-      // If fss_other_parties is empty in Supabase, auto-seed with local active other parties
-      if (supabaseOtherParties.length === 0 && Store.data?.parties) {
-        const otherParties = Store.data.parties.filter((p: any) => p.kind === 'other');
-        if (otherParties.length > 0) {
-          console.log('fss_other_parties table is empty in Supabase. Syncing existing other parties to Supabase...');
-          await SupabaseService.syncLocalOtherPartiesToSupabase(Store.data.parties);
-          supabaseOtherParties = await SupabaseService.loadOtherPartiesFromSupabase();
-        }
-      }
+      const supabaseOtherParties = await SupabaseService.loadOtherPartiesFromSupabase();
 
       if (supabaseOtherParties && Store.data?.parties) {
-        supabaseOtherParties.forEach((sop: any) => {
-          const partyRecord = convertFssOtherPartyToParty(sop);
-          const existingIdx = Store.data.parties.findIndex(
-            (p: any) => (p.supabase_id && p.supabase_id === sop.id) ||
-                        (p.kind === 'other' && p.name.trim().toLowerCase() === sop.name.trim().toLowerCase())
-          );
-          if (existingIdx >= 0) {
-            Store.data.parties[existingIdx] = {
-              ...Store.data.parties[existingIdx],
-              ...partyRecord,
-              id: Store.data.parties[existingIdx].id // preserve existing id (e.g. ot_hdfc) for linked entries
-            };
-          } else {
-            Store.data.parties.unshift(partyRecord);
-          }
-        });
+        const localOtherParties = Store.data.parties.filter((party: any) => party.kind === 'other');
+        const cloudOtherParties = replaceMasterRows(
+          localOtherParties,
+          supabaseOtherParties,
+          convertFssOtherPartyToParty,
+          (local: any, remote: any) => local.supabase_id === remote.id ||
+            local.id === String(remote.id) ||
+            String(local.name || '').trim().toLowerCase() === String(remote.name || '').trim().toLowerCase()
+        );
+        Store.data.parties = [...Store.data.parties.filter((party: any) => party.kind !== 'other'), ...cloudOtherParties];
         Store.persist();
-        if (!isOtherPartyMasterMigrationComplete()) {
-          markOtherPartyMasterMigrationComplete();
-          otherPartyMasterMigrationPromise = null;
-        }
         render({ keepScroll: true });
       }
 
@@ -1263,79 +1147,18 @@ export const App: React.FC = () => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let supabaseProjects = await SupabaseService.loadProjectsFromSupabase();
-      let replacingLocalProjectMaster = false;
-      let canonicalProjects: any[] = [];
-
-      if (!isProjectMasterMigrationComplete() && Store.data) {
-        replacingLocalProjectMaster = true;
-        const master = getSeedProjectMaster();
-        canonicalProjects = master.projects;
-        if (!projectMasterMigrationPromise) {
-          const reconciliation = SupabaseService.replaceProjectMasterFromSeed(
-            master.projects,
-            master.clients,
-            Store.data.parties || [],
-            Store.data.departments || []
-          );
-          projectMasterMigrationPromise = reconciliation;
-          reconciliation.catch(() => {
-            if (projectMasterMigrationPromise === reconciliation) projectMasterMigrationPromise = null;
-          });
-        }
-        supabaseProjects = await projectMasterMigrationPromise;
-      } else if (supabaseProjects.length === 0 && Store.data?.projects) {
-        // Keep the existing empty-table bootstrap for users who add projects after migration.
-        const validProjects = Store.data.projects.filter((p: any) => (p.code || p.project_code) && (p.name || p.project_name));
-        if (validProjects.length > 0) {
-          console.log('fss_projects table is empty in Supabase. Syncing existing projects to Supabase...');
-          await SupabaseService.syncLocalProjectsToSupabase(Store.data.projects, Store.data.parties || [], Store.data.departments || []);
-          supabaseProjects = await SupabaseService.loadProjectsFromSupabase();
-        }
-      }
+      const supabaseProjects = await SupabaseService.loadProjectsFromSupabase();
 
       if (supabaseProjects && Store.data?.projects) {
-        if (replacingLocalProjectMaster) {
-          const currentProjects = Store.data.projects;
-          const projectsByCode = new Map(
-            supabaseProjects.map((project: any) => [String(project.project_code || '').trim().toLowerCase(), project])
-          );
-          Store.data.projects = canonicalProjects.map((canonicalProject: any) => {
-            const code = String(canonicalProject.code || '').trim().toLowerCase();
-            const supabaseProject = projectsByCode.get(code);
-            if (!supabaseProject) throw new Error(`Project ${canonicalProject.code} was not returned after Supabase replacement.`);
-            const existing = currentProjects.find((project: any) =>
-              String(project.code || project.project_code || '').trim().toLowerCase() === code
-            );
-            return {
-              ...canonicalProject,
-              ...convertFssProjectToLocal(supabaseProject, Store.data.parties || [], Store.data.departments || []),
-              id: existing?.id || canonicalProject.id
-            };
-          });
-        } else {
-          supabaseProjects.forEach((sp: any) => {
-            const projRecord = convertFssProjectToLocal(sp, Store.data.parties || [], Store.data.departments || []);
-            const existingIdx = Store.data.projects.findIndex(
-              (p: any) => (p.supabase_id && p.supabase_id === sp.id) ||
-                          (p.code && p.code.trim().toLowerCase() === sp.project_code.trim().toLowerCase())
-            );
-            if (existingIdx >= 0) {
-              Store.data.projects[existingIdx] = {
-                ...Store.data.projects[existingIdx],
-                ...projRecord,
-                id: Store.data.projects[existingIdx].id // preserve local id (e.g. pr_2501)
-              };
-            } else {
-              Store.data.projects.unshift(projRecord);
-            }
-          });
-        }
+        Store.data.projects = replaceMasterRows(
+          Store.data.projects,
+          supabaseProjects,
+          (project: any) => convertFssProjectToLocal(project, Store.data.parties || [], Store.data.departments || []),
+          (local: any, remote: any) => local.supabase_id === remote.id ||
+            String(local.code || local.project_code || '').trim().toLowerCase() ===
+              String(remote.project_code || '').trim().toLowerCase()
+        );
         Store.persist();
-        if (replacingLocalProjectMaster) {
-          markProjectMasterMigrationComplete();
-          projectMasterMigrationPromise = null;
-        }
         render({ keepScroll: true });
       }
 
@@ -1362,35 +1185,17 @@ export const App: React.FC = () => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let supabaseDepts = await SupabaseService.loadDepartmentsFromSupabase();
-
-      // If fss_departments is empty in Supabase, auto-seed with local active departments
-      if (supabaseDepts.length === 0 && Store.data?.departments) {
-        const validDepts = Store.data.departments.filter((d: any) => d.name);
-        if (validDepts.length > 0) {
-          console.log('fss_departments table is empty in Supabase. Syncing existing departments to Supabase...');
-          await SupabaseService.syncLocalDepartmentsToSupabase(Store.data.departments);
-          supabaseDepts = await SupabaseService.loadDepartmentsFromSupabase();
-        }
-      }
+      const supabaseDepts = await SupabaseService.loadDepartmentsFromSupabase();
 
       if (supabaseDepts && Store.data?.departments) {
-        supabaseDepts.forEach((sd: any) => {
-          const deptRecord = convertFssDepartmentToLocal(sd);
-          const existingIdx = Store.data.departments.findIndex(
-            (d: any) => (d.supabase_id && d.supabase_id === sd.id) ||
-                        (d.name && d.name.trim().toLowerCase() === sd.department_name.trim().toLowerCase())
-          );
-          if (existingIdx >= 0) {
-            Store.data.departments[existingIdx] = {
-              ...Store.data.departments[existingIdx],
-              ...deptRecord,
-              id: Store.data.departments[existingIdx].id // preserve local id (e.g. dep_design)
-            };
-          } else {
-            Store.data.departments.push(deptRecord);
-          }
-        });
+        Store.data.departments = replaceMasterRows(
+          Store.data.departments,
+          supabaseDepts,
+          convertFssDepartmentToLocal,
+          (local: any, remote: any) => local.supabase_id === remote.id ||
+            local.id === String(remote.id) ||
+            String(local.name || '').trim().toLowerCase() === String(remote.department_name || '').trim().toLowerCase()
+        );
         Store.persist();
         render({ keepScroll: true });
       }
@@ -1418,35 +1223,17 @@ export const App: React.FC = () => {
     if (!isSupabaseConfigured) return;
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
-      let supabaseAccounts = await SupabaseService.loadBankAccountsFromSupabase();
-
-      // If fss_bank_accounts is empty in Supabase, auto-seed with local active accounts
-      if (supabaseAccounts.length === 0 && Store.data?.accounts) {
-        const validAccounts = Store.data.accounts.filter((a: any) => a.name);
-        if (validAccounts.length > 0) {
-          console.log('fss_bank_accounts table is empty in Supabase. Syncing existing bank accounts to Supabase...');
-          await SupabaseService.syncLocalBankAccountsToSupabase(Store.data.accounts);
-          supabaseAccounts = await SupabaseService.loadBankAccountsFromSupabase();
-        }
-      }
+      const supabaseAccounts = await SupabaseService.loadBankAccountsFromSupabase();
 
       if (supabaseAccounts && Store.data?.accounts) {
-        supabaseAccounts.forEach((sa: any) => {
-          const accRecord = convertFssBankAccountToLocal(sa);
-          const existingIdx = Store.data.accounts.findIndex(
-            (a: any) => (a.supabase_id && a.supabase_id === sa.id) ||
-                        (a.name && a.name.trim().toLowerCase() === sa.account_name.trim().toLowerCase())
-          );
-          if (existingIdx >= 0) {
-            Store.data.accounts[existingIdx] = {
-              ...Store.data.accounts[existingIdx],
-              ...accRecord,
-              id: Store.data.accounts[existingIdx].id // preserve local id (e.g. acc_hdfc)
-            };
-          } else {
-            Store.data.accounts.push(accRecord);
-          }
-        });
+        Store.data.accounts = replaceMasterRows(
+          Store.data.accounts,
+          supabaseAccounts,
+          convertFssBankAccountToLocal,
+          (local: any, remote: any) => local.supabase_id === remote.id ||
+            local.id === String(remote.id) ||
+            String(local.name || '').trim().toLowerCase() === String(remote.account_name || '').trim().toLowerCase()
+        );
         Store.persist();
         render({ keepScroll: true });
       }
@@ -1475,35 +1262,17 @@ export const App: React.FC = () => {
     try {
       setCloudStatus(prev => ({ ...prev, syncing: true, error: null }));
       await SupabaseService.loadCategoryLookups();
-      let supabaseCategories = await SupabaseService.loadCategoriesFromSupabase();
-
-      // If fss_categories is empty in Supabase, auto-seed with local active categories
-      if (supabaseCategories.length === 0 && Store.data?.categories) {
-        const validCategories = Store.data.categories.filter((c: any) => c.name);
-        if (validCategories.length > 0) {
-          console.log('fss_categories table is empty in Supabase. Syncing existing categories to Supabase...');
-          await SupabaseService.syncLocalCategoriesToSupabase(Store.data.categories);
-          supabaseCategories = await SupabaseService.loadCategoriesFromSupabase();
-        }
-      }
+      const supabaseCategories = await SupabaseService.loadCategoriesFromSupabase();
 
       if (supabaseCategories && Store.data?.categories) {
-        supabaseCategories.forEach((sc: any) => {
-          const catRecord = convertFssCategoryToLocal(sc, Store.data.categories);
-          const existingIdx = Store.data.categories.findIndex(
-            (c: any) => (c.supabase_id && c.supabase_id === sc.id) ||
-                        (c.name && c.name.trim().toLowerCase() === (sc.category_name || '').trim().toLowerCase())
-          );
-          if (existingIdx >= 0) {
-            Store.data.categories[existingIdx] = {
-              ...Store.data.categories[existingIdx],
-              ...catRecord,
-              id: Store.data.categories[existingIdx].id // preserve existing local id (e.g. cat_sal)
-            };
-          } else {
-            Store.data.categories.push(catRecord);
-          }
-        });
+        const localCategories = Store.data.categories;
+        Store.data.categories = replaceMasterRows(
+          localCategories,
+          supabaseCategories,
+          (category: any) => convertFssCategoryToLocal(category, localCategories),
+          (local: any, remote: any) => local.supabase_id === remote.id ||
+            String(local.name || '').trim().toLowerCase() === String(remote.category_name || '').trim().toLowerCase()
+        );
         Store.persist();
         render({ keepScroll: true });
       }
@@ -2285,7 +2054,6 @@ export const App: React.FC = () => {
         await boot();
         (window as any).Store = Store;
         (window as any).api = api;
-        mergeSeedOtherPartiesLocally(getSeedOtherPartyMaster());
         render({ keepScroll: true });
       } catch (err) {
         console.error('Error during boot:', err);
